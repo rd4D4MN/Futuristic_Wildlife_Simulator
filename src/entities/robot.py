@@ -1,9 +1,10 @@
 import random
 import math
 import pygame
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 from src.entities.animal import Animal
+from src.entities.team import Team
 
 class Robot(pygame.sprite.Sprite):
     def __init__(self, x: int, y: int):
@@ -62,9 +63,9 @@ class Robot(pygame.sprite.Sprite):
         
         # Team status
         self.has_team = False
-        self.team = None
+        self.team: Optional['Team'] = None
         self.state = 'searching'
-        self.nearby_animals = []
+        self.nearby_animals: List['Animal'] = []
 
         # Add territory bounds
         self.territory_center = (x, y)
@@ -193,7 +194,8 @@ class Robot(pygame.sprite.Sprite):
             if dist <= self.scan_radius:
                 self.nearby_animals.append(animal)
         
-        if len(self.nearby_animals) > 0:
+        # Only log if debug mode is enabled
+        if hasattr(self, 'debug_mode') and self.debug_mode and len(self.nearby_animals) > 0:
             print(f"Robot at ({self.x:.0f},{self.y:.0f}) detected {len(self.nearby_animals)} animals")
 
     def _search_for_animals(self, dt: float) -> None:

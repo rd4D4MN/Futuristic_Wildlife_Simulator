@@ -36,7 +36,7 @@ class Camera:
         self.offset_y = max(0, min(self.offset_y, WORLD_HEIGHT * TILE_SIZE - self.height))
 
 
-def test_map_visualization():
+def test_map_visualization(debug: bool = False):
     pygame.init()
     screen = pygame.display.set_mode((800, 600))
     pygame.display.set_caption("Map Test")
@@ -49,23 +49,31 @@ def test_map_visualization():
     rasters = []
     for dataset in datasets:
         raster, transform = load_raster_data(dataset)
-        visualize_raster(raster, title=f"Dataset: {os.path.basename(dataset)}")
+        if debug:
+            visualize_raster(raster, title=f"Dataset: {os.path.basename(dataset)}")
         rasters.append((raster, transform))
 
     # Resample and normalize combined raster data
     combined_data = np.zeros((WORLD_HEIGHT, WORLD_WIDTH), dtype=float)
     for raster, _ in rasters:
-        resampled, _ = resample_raster(dataset, WORLD_HEIGHT, WORLD_WIDTH)
-        normalized = normalize_raster_data(resampled)
+        resampled, _ = resample_raster(dataset, WORLD_HEIGHT, WORLD_WIDTH, debug=debug)
+        normalized = normalize_raster_data(resampled, debug=debug)
         combined_data += normalized
     combined_data /= len(rasters)  # Average
 
     # Generate the world grid
-    world_grid, normalized_data = generate_world_grid(combined_data, tile_mapping)
+    world_grid, normalized_data = generate_world_grid(
+        raster_data=combined_data,
+        transform=None,
+        land_mask=np.ones_like(combined_data),
+        color_classification=False,
+        debug=debug
+    )
 
-    # Print terrain distribution
-    terrain_count = Counter([tile for row in world_grid for tile in row])
-    print("Terrain Distribution:", terrain_count)
+    # Print terrain distribution only in debug mode
+    if debug:
+        terrain_count = Counter([tile for row in world_grid for tile in row])
+        print("Terrain Distribution:", terrain_count)
 
     # Initialize camera
     camera = Camera(screen.get_width(), screen.get_height())

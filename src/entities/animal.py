@@ -3,40 +3,87 @@ import math
 import pygame
 from typing import Dict, Any, List, Optional, Tuple
 import os
+from evolution.genome import Genome
+from src.entities.team import Team
+
 
 class Animal(pygame.sprite.Sprite):
     #########################
     # 1. Initialization
     #########################
-    def __init__(self, name: str, attributes: Dict[str, Any]):
+    def __init__(self, name: str, data: Dict, genome: Optional[Genome] = None, generation: int = 1):
+        """Initialize animal with optional genome for evolved instances."""
         super().__init__()
-        # General attributes
         self.name = name
-        self.attributes = attributes
-
-        # Physical attributes
-        h_max = attributes.get("Height_Max", 50.0)
-        w_max = attributes.get("Weight_Max", 10.0)
+        self.original_data = data
+        self.generation = generation
+        self.age = 0
+        
+        # Basic attributes - ensure valid health values
+        self.max_health = max(1.0, float(data.get('Max_Health', 100.0)))
+        self.health = self.max_health
+        self.team: Optional['Team'] = None
+        self.target = None
+        self.world_grid = None
+        
+        # Position and movement
+        self.x = 0
+        self.y = 0
+        self.dx = 0
+        self.dy = 0
+        self.speed = float(data.get('Speed_Max', 30))
+        self.direction = random.uniform(0, 2 * math.pi)
+        
+        # Combat attributes
+        self.attack_multiplier = float(data.get('Attack_Multiplier', 1.0))
+        self.armor_rating = float(data.get('Armor_Rating', 1.0))
+        self.agility_score = float(data.get('Agility_Score', 100.0))
+        self.stamina_rating = float(data.get('Stamina_Rating', 0.0))
+        
+        # Evolution attributes
+        self.genome = genome  # Store the provided genome
+        self.maturity_score = float(data.get('Maturity_Score', 0.0))
+        self.reproduction_rate = float(data.get('Reproduction_Rate', 1.0))
+        self.social_score = float(data.get('Social_Score', 0.5))
+        self.generation_time = float(data.get('Generation_Time', 100.0))
+        self.predator_pressure = float(data.get('Predator_Pressure', 0.4))
+        
+        # Environmental attributes
+        self.habitat = str(data.get('Habitat', 'Grassland'))
+        self.combat_traits = str(data.get('Combat_Traits', 'none'))
+        self.natural_weapons = self._parse_natural_weapons(data.get('Natural_Weapons', ''))
+        
+        # Apply genome if provided
+        if genome:
+            self._apply_genome(genome)
+            # Revalidate health after genome application
+            self.max_health = max(1.0, self.max_health)
+            self.health = min(self.max_health, max(0, self.health))
+        
+        # Visual attributes
+        self.color = self._parse_color(data.get('Color', 'Brown'))
+        self.size = max(10, min(30, math.sqrt(float(data.get('Weight_Max', 50)))))
+        self.draw_surface = self._create_draw_surface()
+        
+        # General attributes
+        h_max = data.get("Height_Max", 50.0)
+        w_max = data.get("Weight_Max", 10.0)
         self.height = random.uniform(0.5 * h_max, h_max)
         self.weight = random.uniform(0.5 * w_max, w_max)
-        self.speed = max(1.0, attributes.get("Speed_Max", 5.0))
+        self.speed = max(1.0, data.get("Speed_Max", 5.0))
 
         # Combat attributes
-        self.defense = 1.0 + (attributes.get("Armor_Rating", 1.0) - 1.0)
-        self.attack_multiplier = attributes.get("Attack_Multiplier", 1.0)
-        self.apex_bonus = attributes.get("Apex_Predator_Bonus", 1.0)
-        self.pack_bonus = attributes.get("Pack_Hunter_Bonus", 1.0)
+        self.defense = 1.0 + (self.armor_rating - 1.0)
+        self.apex_bonus = data.get("Apex_Predator_Bonus", 1.0)
+        self.pack_bonus = data.get("Pack_Hunter_Bonus", 1.0)
 
         # Position and state
-        self.x, self.y = 0.0, 0.0
         self.state = "wandering"  # Default state
         self.direction_angle = random.random() * 2 * math.pi
         self.direction_timer = 2.0
 
         # Health and stamina
-        self.health = max(50.0, (self.weight ** 0.5) * 10)
-        self.max_health = self.health
-        self.stamina = max(1.0, attributes.get("Stamina_Rating", 50.0))
+        self.stamina = max(1.0, data.get("Stamina_Rating", 50.0))
         self.current_stamina = self.stamina
         self.stamina_recovery_rate = 5.0
 
@@ -44,8 +91,8 @@ class Animal(pygame.sprite.Sprite):
         self.team = None
 
         # Habitat and behavior
-        self.preferred_habitat = self._parse_habitat(attributes.get('Habitat', ''))
-        self.is_social = 'social' in attributes.get('Social_Structure', '').lower()
+        self.preferred_habitat = self._parse_habitat(data.get('Habitat', ''))
+        self.is_social = 'social' in data.get('Social_Structure', '').lower()
         self.group_distance = 50 if self.is_social else 100
         self.separation_distance = 20
         self.group_members = []
@@ -90,89 +137,36 @@ class Animal(pygame.sprite.Sprite):
         if self.health <= 0:
             return
 
-        # Get terrain effects for current position
-        try:
-            grid_x = max(0, min(int(self.x // 8), len(world_grid[0]) - 1))
-            grid_y = max(0, min(int(self.y // 8), len(world_grid) - 1))
-            terrain = world_grid[grid_y][grid_x]
-            terrain_effects = environment.get_environment_effects(grid_x, grid_y)
-            
-            # Update health based on terrain compatibility
-            self.can_survive_in(terrain)  # This updates terrain_health_effect
-            health_change = self.terrain_health_effect * dt * 5  # 5 health points per second
-            self.health = min(self.max_health, max(0, self.health + health_change))
-            
-            # Apply terrain movement modifier
-            effective_speed = self.speed * terrain_effects['movement_speed']
-            if terrain not in self.get_optimal_terrains():
-                effective_speed *= 0.5  # Slower in non-optimal terrain
-            
-            # If part of a team, follow team formation
-            if self.team:
-                target_pos = self.team.get_target_position(self)
-                if target_pos:
-                    dx = target_pos[0] - self.x
-                    dy = target_pos[1] - self.y
-                    dist = math.sqrt(dx*dx + dy*dy)
-                    
-                    if dist > 5:  # Only move if not at position
-                        # Calculate movement with terrain effect
-                        move_speed = effective_speed * dt
-                        move_x = (dx/dist) * move_speed
-                        move_y = (dy/dist) * move_speed
-                        
-                        # Try to move to new position
-                        new_x = self.x + move_x
-                        new_y = self.y + move_y
-                        
-                        if self._is_valid_position(new_x, new_y, world_grid):
-                            self.x = new_x
-                            self.y = new_y
-            else:
-                # Independent movement
-                self._update_independent(dt, effective_speed, world_grid)
+        self.age += dt
 
-            # Clamp position to world bounds with margin
-            margin = 8  # One tile margin
-            max_x = (len(world_grid[0]) - 2) * 8
-            max_y = (len(world_grid) - 2) * 8
-            self.x = max(margin, min(self.x, max_x))
-            self.y = max(margin, min(self.y, max_y))
+        if self.team:
+            # Team behavior takes precedence
+            return
             
-            # Update sprite position
-            self.rect.center = (self.x, self.y)
+        # Solo behavior
+        self._update_movement(dt, environment, world_grid, nearby_entities)
+
+    def _update_movement(self, dt: float, environment, world_grid, nearby_entities) -> None:
+        """Update movement based on environment and nearby entities."""
+        # Random movement with persistence
+        if random.random() < 0.02:  # Change direction occasionally
+            self.direction += random.uniform(-math.pi/4, math.pi/4)
             
-        except IndexError as e:
-            print(f"Warning: Animal {self.name} at invalid position ({self.x}, {self.y}), resetting to safe position")
-            # Reset to a safe position
-            self.x = max(32, min(self.x, (len(world_grid[0]) - 2) * 8))
-            self.y = max(32, min(self.y, (len(world_grid) - 2) * 8))
-            self.rect.center = (self.x, self.y)
-
-    def _update_independent(self, dt: float, speed: float, world_grid) -> None:
-        """Handle movement when not part of a team."""
-        # Update wandering direction
-        self.direction_timer -= dt
-        if self.direction_timer <= 0:
-            self.direction_timer = random.uniform(2.0, 4.0)
-            self.direction_angle = random.random() * 2 * math.pi
-
         # Calculate movement
-        dx = math.cos(self.direction_angle) * speed * dt
-        dy = math.sin(self.direction_angle) * speed * dt
+        self.dx = math.cos(self.direction) * self.speed * dt
+        self.dy = math.sin(self.direction) * self.speed * dt
         
-        # Try to move
-        new_x = self.x + dx
-        new_y = self.y + dy
+        # Apply movement if valid position
+        new_x = self.x + self.dx
+        new_y = self.y + self.dy
         
-        # Check if new position is valid
         if self._is_valid_position(new_x, new_y, world_grid):
             self.x = new_x
             self.y = new_y
         else:
-            # If invalid, try random new direction
-            self.direction_timer = 0
-
+            # Bounce off boundaries
+            self.direction += math.pi + random.uniform(-math.pi/4, math.pi/4)
+            
     def _wander(self, world_grid, effective_speed, dt):
         """Move randomly within valid bounds."""
         if self.direction_timer <= 0:
@@ -209,7 +203,7 @@ class Animal(pygame.sprite.Sprite):
 
     def can_survive_in(self, terrain_type: str) -> bool:
         """Check if the animal can survive in the given terrain."""
-        habitat_str = self.attributes.get('Habitat', '').lower()
+        habitat_str = self.original_data.get('Habitat', '').lower()
         
         # Direct terrain mappings
         terrain_mappings = {
@@ -280,7 +274,7 @@ class Animal(pygame.sprite.Sprite):
 
     def get_optimal_terrains(self) -> List[str]:
         """Get list of optimal terrains for this animal."""
-        habitat_str = self.attributes.get('Habitat', '').lower()
+        habitat_str = self.original_data.get('Habitat', '').lower()
         
         # Direct terrain mappings
         terrain_mappings = {
@@ -311,10 +305,26 @@ class Animal(pygame.sprite.Sprite):
             self._draw_health_bar(screen, camera_x, camera_y)
 
     def _draw_health_bar(self, screen: pygame.Surface, camera_x: int, camera_y: int):
-        """Draw a health bar above the animal."""
+        """Draw a health bar above the animal with safety checks."""
+        # Safety checks for health values
+        if not hasattr(self, 'health') or not hasattr(self, 'max_health'):
+            return
+            
+        if self.health is None or self.max_health is None or self.max_health <= 0:
+            return
+            
         bar_width = 32  # Half of sprite width
         bar_height = 4
-        health_ratio = self.health / self.max_health
+        
+        # Ensure health values are valid
+        health = max(0, min(self.health, self.max_health))
+        max_health = max(1, self.max_health)  # Prevent division by zero
+        health_ratio = health / max_health
+        
+        # Ensure ratio is valid
+        if not (0 <= health_ratio <= 1):
+            health_ratio = 0
+            
         fill_width = int(bar_width * health_ratio)
         
         # Center the health bar above the sprite
@@ -332,6 +342,11 @@ class Animal(pygame.sprite.Sprite):
         """Clean up resources associated with the animal."""
         if hasattr(self, 'image'):
             del self.image  # Delete the sprite image to free memory
+        if self.team and not hasattr(self, '_being_removed'):
+            self._being_removed = True  # Mark that we're being removed to prevent recursion
+            self.team.remove_member(self)
+            delattr(self, '_being_removed')
+        self.team = None
     
     #########################
     # 5. Utility Methods
@@ -362,4 +377,88 @@ class Animal(pygame.sprite.Sprite):
             return 'desert'
         return 'grassland'
 
+    def _parse_natural_weapons(self, weapons_str: str) -> List[str]:
+        """Parse natural weapons string into list."""
+        if not weapons_str or weapons_str == 'none':
+            return []
+        return [w.strip() for w in weapons_str.split(',')]
+        
+    def _parse_color(self, color_str: str) -> Tuple[int, int, int]:
+        """Convert color string to RGB tuple."""
+        color_map = {
+            'Red': (255, 0, 0),
+            'Green': (0, 255, 0),
+            'Blue': (0, 0, 255),
+            'Yellow': (255, 255, 0),
+            'Brown': (139, 69, 19),
+            'Black': (0, 0, 0),
+            'White': (255, 255, 255),
+            'Gray': (128, 128, 128),
+            'Orange': (255, 165, 0),
+            'Purple': (128, 0, 128)
+        }
+        
+        # Handle multiple colors
+        if ',' in color_str:
+            colors = color_str.split(',')
+            color_str = colors[0].strip()
+            
+        return color_map.get(color_str, (139, 69, 19))  # Default to brown
+        
+    def _create_draw_surface(self) -> pygame.Surface:
+        """Create the surface for drawing the animal."""
+        size = int(self.size * 2)
+        surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        
+        # Base shape
+        pygame.draw.circle(surface, self.color, (size//2, size//2), self.size)
+        
+        # Generation indicator (darker with higher generation)
+        if self.generation > 1:
+            darkness = min(200, self.generation * 20)
+            pygame.draw.circle(
+                surface,
+                (0, 0, 0, darkness),
+                (size//2, size//2),
+                self.size//2
+            )
+        
+        return surface
+        
+    def _apply_genome(self, genome: Genome) -> None:
+        """Apply genome traits with safety checks."""
+        if not genome or not genome.genes:
+            return
+            
+        # Apply genome traits with validation
+        if 'max_health' in genome.genes:
+            self.max_health = max(1.0, genome.genes['max_health'].value * 100.0)
+            self.health = min(self.max_health, self.health)  # Ensure health doesn't exceed max
+        
+        # Update attributes from genes
+        self.attack_multiplier = genome.genes['attack_multiplier'].value
+        self.armor_rating = genome.genes['armor_rating'].value
+        self.agility_score = genome.genes['agility_score'].value
+        self.stamina_rating = genome.genes['stamina_rating'].value
+        self.social_score = genome.genes['social_score'].value
+        self.maturity_score = genome.genes['maturity_score'].value
+        
+        # Recalculate derived attributes
+        self.max_health = 100.0 * (1 + self.stamina_rating * 0.5)
+        self.health = self.max_health
+        
+    def take_damage(self, amount: float) -> None:
+        """Take damage with safety checks."""
+        if not isinstance(amount, (int, float)) or math.isnan(amount):
+            return
+            
+        self.health = max(0, min(self.max_health, self.health - amount))
+        
+    def heal(self, amount: float) -> None:
+        """Heal with safety checks."""
+        if not isinstance(amount, (int, float)) or math.isnan(amount):
+            return
+            
+        self.health = max(0, min(self.max_health, self.health + amount))
+        
 

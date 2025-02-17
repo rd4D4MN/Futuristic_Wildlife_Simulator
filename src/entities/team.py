@@ -1,17 +1,14 @@
-import pygame
 from typing import List, Tuple, Union, Optional
-from .robot import Robot
-from .animal import Animal
+import pygame
 import random
 import math
 
-
 class Team:
-    def __init__(self, leader: Union[Robot, Animal]):
+    def __init__(self, leader: Union['Robot', 'Animal']):
         """Initialize team with a leader."""
         # Basic attributes
         self.leader = leader
-        self.members: List[Animal] = []
+        self.members: List['Animal'] = []
         
         # Timing and cooldowns first
         self.battle_cooldown = 180  # Reduced from 300 (3 seconds instead of 5)
@@ -87,21 +84,16 @@ class Team:
 
     def _update_formation(self) -> None:
         """Update team formation type based on situation and strategy."""
-        # Don't always default to defensive
         if len(self.members) <= 2:
-            # Small teams play it safe
             self.formation = 'defensive'
         elif any(m.health < m.max_health * 0.3 for m in self.members):
-            # Critical health situation
             self.formation = 'defensive'
         else:
-            # Dynamic formation based on team strength and situation
             total_strength = self.calculate_combat_strength()
-            if total_strength > 500:  # Strong team
+            if total_strength > 500:
                 self.formation = 'aggressive'
-            elif random.random() < self.aggression * 0.3:  # Random formation changes
+            elif random.random() < self.aggression * 0.3:
                 self.formation = random.choice(['aggressive', 'defensive', 'scout'])
-                self._log_debug(f"Changed formation to {self.formation}")
 
     def calculate_combat_strength(self) -> float:
         """Calculate the total combat strength of the team."""
@@ -133,7 +125,7 @@ class Team:
         
         return base_strength * size_factor * health_factor * aggression_bonus * formation_multiplier
 
-    def add_member(self, animal: Animal) -> None:
+    def add_member(self, animal: 'Animal') -> None:
         """Add a new member to the team."""
         animal.team = self
         # Only set world_grid if leader has it
@@ -141,10 +133,11 @@ class Team:
             animal.world_grid = self.leader.world_grid
         self.members.append(animal)
 
-    def remove_member(self, animal: Animal) -> None:
+    def remove_member(self, animal: 'Animal') -> None:
         """Remove a member from the team."""
         if animal in self.members:
-            animal.cleanup()  # Call the cleanup method when removing the animal
+            if not hasattr(animal, '_being_removed'):
+                animal.cleanup()  # Call the cleanup method when removing the animal
             animal.team = None
             self.members.remove(animal)
 
@@ -300,13 +293,13 @@ class Team:
     def is_active(self) -> bool:
         """Check if team has any active members or living leader."""
         return self.get_member_count() > 0
-    def _distance_to_leader(self, member: Animal) -> float:
+    def _distance_to_leader(self, member: 'Animal') -> float:
         """Calculate distance between member and leader."""
         dx = member.x - self.leader.x
         dy = member.y - self.leader.y
         return math.sqrt(dx * dx + dy * dy)
 
-    def get_target_position(self, member: Animal) -> Tuple[float, float]:
+    def get_target_position(self, member: 'Animal') -> Tuple[float, float]:
         """Get ideal position for a team member."""
         return self.formation_positions.get(member, (self.leader.x, self.leader.y))
 
@@ -387,18 +380,25 @@ class Team:
         return True
 
     def _log_debug(self, message: str) -> None:
-        """Add timestamped debug message."""
+        """Add timestamped debug message for critical events only."""
+        # Only log critical events
+        critical_keywords = ['disbanded', 'failed', 'recovered']
+        
+        if not any(keyword in message.lower() for keyword in critical_keywords):
+            return
+            
         current_time = pygame.time.get_ticks() / 1000.0
         if current_time - self.last_debug_time >= self.debug_interval:
             self.last_debug_time = current_time
             debug_entry = f"[{current_time:.1f}s] Team {self.get_leader_name()}: {message}"
-            print(debug_entry)  # Print immediately for real-time debugging
-            self.debug_logs.append(debug_entry)
-            if len(self.debug_logs) > 100:  # Keep last 100 messages
-                self.debug_logs.pop(0)
-
+            print(debug_entry)  # Print only critical messages
+            
     def _disband_team(self) -> None:
         """Handle team disbanding."""
         for member in self.members:
             member.team = None
         self.members.clear()
+
+# Import at bottom to avoid circular dependencies
+from .robot import Robot
+from .animal import Animal

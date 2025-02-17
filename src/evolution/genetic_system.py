@@ -1,6 +1,6 @@
 import random
 from typing import List, Dict, Any
-from ..entities.animal import Animal
+from entities.animal import Animal
 
 class GeneticSystem:
     def __init__(self):

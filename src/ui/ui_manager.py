@@ -56,11 +56,16 @@ class UIManager:
         self.leader_highlight_radius = 20
 
         # Add team table configuration
-        self.team_table_width = 350  # Adjusted width
-        self.team_table_row_height = 25  # Adjusted row height
+        self.team_table_width = 350
+        self.team_table_row_height = 25
         self.team_table_padding = 12
-        self.max_visible_teams = 12  # Increased from 8
+        self.max_visible_teams = 12
         
+        # Add spectator info configuration
+        self.spectator_info_width = 300
+        self.spectator_info_height = 120
+        self.spectator_info_padding = 10
+
         # Remove debug panel configuration
         self.show_debug = False  # Disable debug logs
         
@@ -214,7 +219,7 @@ class UIManager:
         
         # Draw status text and hotkeys
         status_text = f"Animals: {stats['alive_animals']} | Teams: {stats['alive_teams']}"
-        hotkeys_text = "[H] Health Bars | [M] Minimap | [T] Teams | [ESC] Quit"
+        hotkeys_text = "[Tab] Spectate | [H] Health Bars | [M] Minimap | [T] Teams | [ESC] Quit"
         
         status = self.font.render(status_text, True, self.colors['text'])
         hotkeys = self.font.render(hotkeys_text, True, self.colors['text'])
@@ -260,24 +265,28 @@ class UIManager:
                     loser = result['loser']
                     casualties = len(result.get('casualties', []))
                     
-                    # Simplified battle display
-                    text = f"{winner} vs {loser}"
+                    # Format team names to show "Robot #X" instead of just numbers
+                    winner_name = f"Robot #{winner.split()[-1]}" if winner.isdigit() else winner
+                    loser_name = f"Robot #{loser.split()[-1]}" if loser.isdigit() else loser
+                    
+                    # Simplified battle display with better formatting
+                    text = f"{winner_name} defeated {loser_name}"
                     battle_text = self.font.render(text, True, self.colors['text'])
                     self.battle_log_surface.blit(battle_text, (padding, y_offset))
                     
-                    # Casualties count
-                    cas_text = f"({casualties})"
+                    # Casualties count with label
+                    cas_text = f"Casualties: {casualties}"
                     cas_surf = self.font.render(cas_text, True, self.colors['warning'])
-                    self.battle_log_surface.blit(cas_surf, (padding + battle_text.get_width() + 5, y_offset))
+                    self.battle_log_surface.blit(cas_surf, (padding, y_offset + 20))
                     
-                    y_offset += 30
+                    y_offset += 45
                 else:
-                    text = "Draw"
+                    text = "Battle ended in a draw"
                     battle_text = self.font.render(text, True, self.colors['warning'])
                     self.battle_log_surface.blit(battle_text, (padding, y_offset))
                     y_offset += 25
         
-        # Use cached surface
+        # Position battle log below minimap with spacing
         x = self.screen_width - panel_width - padding
         y = self.MINIMAP_HEIGHT + (padding * 3)
         screen.blit(self.battle_log_surface, (x, y))
@@ -290,7 +299,7 @@ class UIManager:
         # Sort teams by size and take top 10
         active_teams = [t for t in teams if t.is_active()]
         active_teams.sort(key=lambda t: len(t.members), reverse=True)
-        active_teams = active_teams[:10]  # Only show top 10
+        active_teams = active_teams[:10]
         
         if not active_teams:
             return
@@ -312,13 +321,13 @@ class UIManager:
         panel.blit(title, (self.team_table_padding, self.team_table_padding))
         
         # Draw column headers
-        headers = ["Team", "Size", "Formation"]
+        headers = ["Robot", "Size", "Formation"]
         x = self.team_table_padding
         y = header_height
         for header in headers:
             text = self.font.render(header, True, self.colors['text'])
             panel.blit(text, (x, y))
-            x += 100  # Fixed column width
+            x += 100
             
         # Draw separator line
         pygame.draw.line(panel, self.colors['border'],
@@ -326,7 +335,7 @@ class UIManager:
                         (panel_width - self.team_table_padding, header_height + 20))
         
         # Draw teams
-        y = header_height + 25  # Start below header and separator
+        y = header_height + 25
         for i, team in enumerate(active_teams[:self.max_visible_teams]):
             # Background for alternate rows
             if i % 2 == 0:
@@ -335,8 +344,11 @@ class UIManager:
             
             x = self.team_table_padding
             
+            # Format robot name consistently
+            robot_name = f"Robot #{team.get_leader_name()}" if team.get_leader_name().isdigit() else team.get_leader_name()
+            
             # Team name
-            name = self.font.render(team.get_leader_name(), True, self.colors['text'])
+            name = self.font.render(robot_name, True, self.colors['text'])
             panel.blit(name, (x, y + 2))
             x += 100
             
@@ -352,8 +364,8 @@ class UIManager:
             
             y += row_height
         
-        # Draw panel with small margin from top-left
-        screen.blit(panel, (10, 10))
+        # Draw panel with margin from top-left, leaving space for spectator info
+        screen.blit(panel, (10, self.spectator_info_height + 20))
 
     def toggle_ui_element(self, element: str) -> None:
         """Toggle UI elements with debug prints."""

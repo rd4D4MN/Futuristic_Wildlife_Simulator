@@ -9,6 +9,7 @@ import geopandas as gpd
 import shapely.geometry as geom
 import matplotlib.pyplot as plt
 from typing import Tuple, Dict, Optional, List
+import pygame
 
 # Constants
 TILE_SIZE = 8
@@ -38,37 +39,49 @@ def load_raster_data(file_path: str) -> Tuple[np.ndarray, rasterio.Affine]:
 
 def resample_raster(file_path: str,
                     target_height: int,
-                    target_width: int) -> Tuple[np.ndarray, rasterio.Affine]:
+                    target_width: int,
+                    debug: bool = False) -> Tuple[np.ndarray, rasterio.Affine]:
     """
     Resample the raster to (target_height, target_width) using bilinear resampling.
     Returns (data, new_transform).
     """
-    with rasterio.open(file_path) as src:
-        data = src.read(
-            1,
-            out_shape=(target_height, target_width),
-            resampling=Resampling.bilinear
-        )
-        # Scale transform for the smaller shape
-        scale_x = src.width / float(target_width)
-        scale_y = src.height / float(target_height)
-        new_transform = src.transform * rasterio.Affine.scale(scale_x, scale_y)
+    try:
+        with rasterio.open(file_path) as src:
+            data = src.read(
+                1,
+                out_shape=(target_height, target_width),
+                resampling=Resampling.bilinear
+            )
+            # Scale transform for the smaller shape
+            scale_x = src.width / float(target_width)
+            scale_y = src.height / float(target_height)
+            new_transform = src.transform * rasterio.Affine.scale(scale_x, scale_y)
 
-    return data, new_transform
+            # Normalize data silently
+            min_value = np.min(data)
+            max_value = np.max(data)
+            if min_value != max_value:
+                data = (data - min_value) / (max_value - min_value)
+
+            return data, new_transform
+    except Exception as e:
+        if debug:
+            print(f"Error resampling raster: {e}")
+        return None, None
 
 def load_land_shapefile(shapefile_path: str) -> gpd.GeoDataFrame:
     """
     Load the Natural Earth 10m land polygon shapefile (EPSG:4326).
     Return empty if not found.
     """
-    if not os.path.exists(shapefile_path):
-        print(f"Warning: Shapefile not found at {shapefile_path}")
-        return gpd.GeoDataFrame()
-    gdf = gpd.read_file(shapefile_path)
-    if gdf.crs is None:
-        print("Warning: shapefile has no CRS. Assuming EPSG:4326.")
-        gdf = gdf.set_crs(epsg=4326)
-    return gdf
+    try:
+        land_gdf = gpd.read_file(shapefile_path)
+        if not land_gdf.crs:
+            land_gdf.set_crs(epsg=4326, inplace=True)
+        return land_gdf
+    except Exception as e:
+        print(f"Error loading shapefile: {e}")
+        return None
 
 def rasterize_land(land_gdf: gpd.GeoDataFrame,
                    out_shape: tuple,
@@ -95,7 +108,8 @@ def rasterize_land(land_gdf: gpd.GeoDataFrame,
 
 def normalize_raster_data(raster_data: np.ndarray,
                           min_value: float = None,
-                          max_value: float = None) -> np.ndarray:
+                          max_value: float = None,
+                          debug: bool = False) -> np.ndarray:
     """
     Optional: apply min-max stretching to the raster_data.
     """
@@ -103,7 +117,8 @@ def normalize_raster_data(raster_data: np.ndarray,
         min_value = np.nanmin(raster_data)
     if max_value is None:
         max_value = np.nanmax(raster_data)
-    print(f"Normalizing raster: Min={min_value}, Max={max_value}")
+    if debug:
+        print(f"Normalizing raster: Min={min_value}, Max={max_value}")
     clipped = np.clip(raster_data, min_value, max_value)
     return (clipped - min_value) / (max_value - min_value)
 
@@ -118,11 +133,35 @@ def classify_color_based(r, g, b) -> str:
     else:
         return "grassland"
 
+def get_terrain_type(raster_value: float, land_mask_value: int) -> str:
+    """Determine terrain type based on raster and land mask values."""
+    if land_mask_value == 0:
+        return "aquatic"
+        
+    # Add random offset for variety
+    offset = random.uniform(-0.05, 0.05)
+    val = raster_value + offset
+    
+    # Terrain thresholds
+    thresholds = [0.2, 0.4, 0.6, 0.8]
+    
+    if val <= thresholds[0]:
+        return "aquatic"
+    elif val <= thresholds[1]:
+        return "grassland"
+    elif val <= thresholds[2]:
+        return "forest"
+    elif val <= thresholds[3]:
+        return "mountain"
+    else:
+        return "desert"
+
 def generate_world_grid(
     raster_data: np.ndarray,
     transform: rasterio.Affine,
     land_mask: np.ndarray,
-    color_classification: bool = False
+    color_classification: bool = False,
+    debug: bool = False
 ) -> Tuple[List[List[str]], np.ndarray]:
     """
     Create a 2D list of terrain from the 40x60 raster.
@@ -139,70 +178,20 @@ def generate_world_grid(
     if (height, width) != (WORLD_HEIGHT, WORLD_WIDTH):
         raise ValueError(f"raster_data shape {data.shape} != (40,60). Did you resample?")
 
-    world_grid = []
-
-    # Single-band
-    # SINGLE-BAND CASE
-    if data.ndim == 2 and not color_classification:
-        # <-- FIX: cast data to float
-        data = data.astype(np.float32, copy=False)
-
-        # Add random noise in float
-        noise = np.random.uniform(0, 0.2, data.shape).astype(np.float32)
-        data += noise
-
-        # Normalize to 0-1
-        data = (data - np.min(data)) / (np.ptp(data))
-
-        thresholds = [0.2, 0.4, 0.6, 0.8]
-        for y in range(WORLD_HEIGHT):
-            row = []
-            for x in range(WORLD_WIDTH):
-                # If land_mask[y,x] = 0 => "aquatic"
-                if land_mask[y, x] == 0:
-                    row.append("aquatic")
-                    continue
-
-                val = data[y, x]
-                offset = random.uniform(-0.05, 0.05)
-                if val <= thresholds[0] + offset:
-                    row.append("aquatic")
-                elif val <= thresholds[1] + offset:
-                    row.append("grassland")
-                elif val <= thresholds[2] + offset:
-                    row.append("forest")
-                elif val <= thresholds[3] + offset:
-                    row.append("mountain")
-                else:
-                    row.append("desert")
-            world_grid.append(row)
-
-
-    # 3-band color classification
-    elif data.ndim == 3 and color_classification:
-        R, G, B = data[0], data[1], data[2]
-        for y in range(WORLD_HEIGHT):
-            row = []
-            for x in range(WORLD_WIDTH):
-                if land_mask[y, x] == 0:
-                    row.append("aquatic")
-                    continue
-                r_val, g_val, b_val = R[y, x], G[y, x], B[y, x]
-                ctype = classify_color_based(r_val, g_val, b_val)
-                row.append(ctype)
-            world_grid.append(row)
-
-    else:
-        raise ValueError("Mismatch: single-band => color_classification=False, or 3-band => True")
-
-    # Debug
-    print(f"Generated world grid with dimensions: {WORLD_HEIGHT}x{WORLD_WIDTH}")
-    terrain_counts = {}
-    for row in world_grid:
-        for tile in row:
-            terrain_counts[tile] = terrain_counts.get(tile, 0) + 1
-    print("Terrain distribution:", terrain_counts)
-
+    world_grid = [[None for _ in range(WORLD_WIDTH)] for _ in range(WORLD_HEIGHT)]
+    terrain_counts = {'aquatic': 0, 'mountain': 0, 'desert': 0, 'forest': 0, 'grassland': 0}
+    
+    for y in range(WORLD_HEIGHT):
+        for x in range(WORLD_WIDTH):
+            # Get terrain type based on raster data and land mask
+            terrain = get_terrain_type(data[y, x], land_mask[y, x])
+            world_grid[y][x] = terrain
+            terrain_counts[terrain] = terrain_counts.get(terrain, 0) + 1
+    
+    # Only print terrain distribution in debug mode
+    if debug:
+        print("Terrain distribution:", terrain_counts)
+    
     return world_grid, data
 
 def get_spawn_points_by_terrain(world_grid: List[List[str]]) -> Dict[str, List[Tuple[int, int]]]:
