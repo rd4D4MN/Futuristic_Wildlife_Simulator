@@ -158,7 +158,7 @@ def generate_world_grid(
         for y in range(WORLD_HEIGHT):
             row = []
             for x in range(WORLD_WIDTH):
-                # If land_mask[y,x] = 0 => “aquatic”
+                # If land_mask[y,x] = 0 => "aquatic"
                 if land_mask[y, x] == 0:
                     row.append("aquatic")
                     continue
@@ -206,7 +206,7 @@ def generate_world_grid(
     return world_grid, data
 
 def get_spawn_points_by_terrain(world_grid: List[List[str]]) -> Dict[str, List[Tuple[int, int]]]:
-    """Generate dictionary of spawn points for each terrain type."""
+    """Generate dictionary of spawn points for each terrain type with improved clustering."""
     spawn_points = {
         "mountain": [],
         "forest": [],
@@ -216,11 +216,41 @@ def get_spawn_points_by_terrain(world_grid: List[List[str]]) -> Dict[str, List[T
         "wetland": []
     }
     
+    # Helper to check surrounding tiles
+    def count_similar_neighbors(x: int, y: int, terrain: str) -> int:
+        count = 0
+        for dx, dy in [(-1,0), (1,0), (0,-1), (0,1)]:
+            nx, ny = x + dx, y + dy
+            if (0 <= nx < len(world_grid[0]) and 
+                0 <= ny < len(world_grid) and 
+                world_grid[ny][nx] == terrain):
+                count += 1
+        return count
+    
+    # First pass: collect all potential spawn points
+    potential_points = {terrain: [] for terrain in spawn_points}
+    
     for y in range(len(world_grid)):
         for x in range(len(world_grid[0])):
             terrain = world_grid[y][x]
             if terrain in spawn_points:
-                spawn_points[terrain].append((x, y))
+                # Calculate cluster score based on similar neighbors
+                cluster_score = count_similar_neighbors(x, y, terrain)
+                potential_points[terrain].append((x, y, cluster_score))
+    
+    # Second pass: select best spawn points
+    for terrain, points in potential_points.items():
+        # Sort by cluster score (higher is better)
+        points.sort(key=lambda p: p[2], reverse=True)
+        
+        # Take points with good clustering, remove the cluster score
+        spawn_points[terrain] = [(x, y) for x, y, _ in points if _ >= 2]
+        
+        # If we don't have enough clustered points, add some random ones
+        if len(spawn_points[terrain]) < 10:
+            random_points = [(x, y) for x, y, _ in points if _ < 2]
+            random.shuffle(random_points)
+            spawn_points[terrain].extend(random_points[:10-len(spawn_points[terrain])])
     
     return spawn_points
 

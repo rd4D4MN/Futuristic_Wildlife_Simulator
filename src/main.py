@@ -109,59 +109,160 @@ class GameState:
             ]
 
 
-    def _spawn_animals(self, num_animals: int = 80) -> List[Animal]:
-        """Spawn animals across the map in suitable habitats."""
+    def _spawn_animals(self, num_animals: int = 100) -> List[Animal]:
+        """Spawn animals across the map with improved distribution and ecosystem balance."""
         spawn_points = get_spawn_points_by_terrain(self.world_grid)
         animals = []
 
-        species_groups = {}
-        for name in self.processed_animals['Animal'].unique():
-            row = self.processed_animals[self.processed_animals['Animal'] == name].iloc[0]
-            habitat = row['Habitat'].lower()
-            if habitat not in species_groups:
-                species_groups[habitat] = []
-            species_groups[habitat].append(name)
+        # Calculate world boundaries in pixels
+        world_width_px = len(self.world_grid[0]) * TILE_SIZE
+        world_height_px = len(self.world_grid) * TILE_SIZE
+        safe_margin = TILE_SIZE * 2  # Keep animals away from edges
 
-        for habitat, species_list in species_groups.items():
-            terrain_type = self._get_terrain_for_habitat(habitat)
-            if terrain_type not in spawn_points or not spawn_points[terrain_type]:
+        # Group animals by their primary habitat and diet type
+        habitat_groups = {}
+        diet_groups = {'carnivore': [], 'herbivore': [], 'omnivore': []}
+        
+        # First, categorize all animals
+        for _, row in self.processed_animals.iterrows():
+            if pd.isna(row['Animal']) or pd.isna(row['Habitat']):
                 continue
+                
+            habitat = self._get_terrain_for_habitat(str(row['Habitat']).lower())
+            diet = str(row['Diet_Type']).lower()
+            
+            if habitat not in habitat_groups:
+                habitat_groups[habitat] = []
+            habitat_groups[habitat].append(row.to_dict())
+            
+            if diet in diet_groups:
+                diet_groups[diet].append(row.to_dict())
 
-            spawn_x, spawn_y = random.choice(spawn_points[terrain_type])
-            base_x = spawn_x * TILE_SIZE
-            base_y = spawn_y * TILE_SIZE
+        print(f"Animals per habitat: {', '.join(f'{k}: {len(v)}' for k, v in habitat_groups.items())}")
+        print(f"Animals per diet: {', '.join(f'{k}: {len(v)}' for k, v in diet_groups.items())}")
 
-            for species in species_list:
-                if len(animals) >= num_animals:
-                    break
+        # Calculate target numbers for each diet type
+        total_spawns = {
+            'carnivore': max(1, int(num_animals * 0.2)),  # At least 1 of each type
+            'herbivore': max(1, int(num_animals * 0.5)),
+            'omnivore': max(1, int(num_animals * 0.3))
+        }
+        
+        # Ensure we don't exceed the total
+        total = sum(total_spawns.values())
+        if total < num_animals:
+            # Distribute remaining animals proportionally
+            remaining = num_animals - total
+            total_spawns['herbivore'] += remaining // 2
+            total_spawns['carnivore'] += remaining // 4
+            total_spawns['omnivore'] += remaining - (remaining // 2) - (remaining // 4)
 
-                row = self.processed_animals[self.processed_animals['Animal'] == species].iloc[0].to_dict()
-                animal = Animal(species, row)
-                spread = 50
+        print(f"Target spawns per diet type: {total_spawns}")
+
+        # Keep track of spawned animals per terrain
+        spawned_per_terrain = {terrain: 0 for terrain in spawn_points.keys()}
+        total_spawned = 0
+        spawn_attempts = 0
+        max_attempts = num_animals * 10  # Allow more attempts
+
+        # Create valid spawn locations dictionary
+        valid_spawn_locations = {}
+        for terrain_type, locations in spawn_points.items():
+            valid_spawn_locations[terrain_type] = [
+                (x, y) for x, y in locations
+                if (safe_margin <= x * TILE_SIZE <= world_width_px - safe_margin and
+                    safe_margin <= y * TILE_SIZE <= world_height_px - safe_margin)
+            ]
+            print(f"Valid spawn locations for {terrain_type}: {len(valid_spawn_locations[terrain_type])}")
+
+        # Main spawning loop - continue until we reach the target number
+        while total_spawned < num_animals and spawn_attempts < max_attempts:
+            spawn_attempts += 1
+            
+            # Try each terrain type
+            for terrain_type in list(spawn_points.keys()):
+                if not valid_spawn_locations[terrain_type]:
+                    continue
+
+                # Get suitable animals for this terrain
+                suitable_animals = habitat_groups.get(terrain_type, [])
+                if not suitable_animals:
+                    continue
+
+                # Select animal based on diet balance
+                available_diets = [diet for diet, count in total_spawns.items() if count > 0]
+                if not available_diets:
+                    continue
+
+                chosen_diet = random.choice(available_diets)
+                suitable_by_diet = [a for a in suitable_animals if str(a.get('Diet_Type', '')).lower() == chosen_diet]
+                
+                if not suitable_by_diet:
+                    continue
+
+                # Try to spawn an animal
+                spawn_x, spawn_y = random.choice(valid_spawn_locations[terrain_type])
+                base_x = spawn_x * TILE_SIZE
+                base_y = spawn_y * TILE_SIZE
+
+                # Select and create animal
+                animal_data = random.choice(suitable_by_diet)
+                animal = Animal(animal_data['Animal'], animal_data)
+                
+                # Add position variation within the tile
+                spread = TILE_SIZE // 2
                 angle = random.random() * 2 * math.pi
                 distance = random.random() * spread
-
                 animal.x = base_x + math.cos(angle) * distance
                 animal.y = base_y + math.sin(angle) * distance
+                
+                # Ensure position is within bounds
+                animal.x = max(safe_margin, min(animal.x, world_width_px - safe_margin))
+                animal.y = max(safe_margin, min(animal.y, world_height_px - safe_margin))
+                
                 animal.world_grid = self.world_grid
                 animals.append(animal)
+                
+                # Update counters
+                total_spawns[chosen_diet] -= 1
+                spawned_per_terrain[terrain_type] += 1
+                total_spawned += 1
+                
+                if total_spawned >= num_animals:
+                    break
 
+        print(f"Successfully spawned {len(animals)} animals after {spawn_attempts} attempts")
+        print(f"Animals per terrain: {spawned_per_terrain}")
+        print(f"Remaining target spawns: {total_spawns}")
+        
         return animals
 
     def _get_terrain_for_habitat(self, habitat: str) -> str:
-        """Map habitat description to terrain type."""
+        """Map habitat description to terrain type with improved matching."""
         habitat = habitat.lower()
-        if any(term in habitat for term in ['ocean', 'marine', 'water']):
+        
+        # Aquatic habitats
+        if any(term in habitat for term in ['ocean', 'marine', 'water', 'aquatic', 'sea', 'river', 'lake']):
             return 'aquatic'
-        elif any(term in habitat for term in ['forest', 'woodland', 'jungle']):
+        
+        # Forest habitats
+        elif any(term in habitat for term in ['forest', 'woodland', 'jungle', 'rainforest', 'tropical']):
             return 'forest'
-        elif any(term in habitat for term in ['mountain', 'alpine']):
+        
+        # Mountain habitats
+        elif any(term in habitat for term in ['mountain', 'alpine', 'highland', 'cliff', 'rocky']):
             return 'mountain'
-        elif any(term in habitat for term in ['desert', 'arid']):
+        
+        # Desert habitats
+        elif any(term in habitat for term in ['desert', 'arid', 'sand', 'dune']):
             return 'desert'
-        elif any(term in habitat for term in ['grass', 'savanna', 'plain']):
+        
+        # Grassland habitats (default if no other match)
+        elif any(term in habitat for term in ['grass', 'savanna', 'plain', 'meadow', 'prairie']):
             return 'grassland'
-        return 'grassland'  # Default
+        
+        # Default to grassland if no clear match
+        return 'grassland'
 
 
 

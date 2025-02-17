@@ -65,21 +65,25 @@ class Animal(pygame.sprite.Sprite):
         grid_x = int(new_x // 8)
         grid_y = int(new_y // 8)
         
-        # Check world boundaries
-        if not (0 <= grid_x < len(world_grid[0]) and 0 <= grid_y < len(world_grid)):
+        # Check world boundaries with a safety margin
+        margin = 1  # One tile margin
+        if not (margin <= grid_x < len(world_grid[0]) - margin and 
+                margin <= grid_y < len(world_grid) - margin):
             return False
             
         # Check terrain compatibility
-        terrain = world_grid[grid_y][grid_x]
-        if not self.can_survive_in(terrain):
-            # Allow some movement in non-preferred terrain to prevent getting stuck
-            current_x = int(self.x // 8)
-            current_y = int(self.y // 8)
-            if abs(current_x - grid_x) <= 1 and abs(current_y - grid_y) <= 1:
-                return True
+        try:
+            terrain = world_grid[grid_y][grid_x]
+            if not self.can_survive_in(terrain):
+                # Allow some movement in non-preferred terrain to prevent getting stuck
+                current_x = int(self.x // 8)
+                current_y = int(self.y // 8)
+                if abs(current_x - grid_x) <= 1 and abs(current_y - grid_y) <= 1:
+                    return True
+                return False
+            return True
+        except IndexError:
             return False
-            
-        return True
 
     def update(self, dt: float, environment, world_grid, nearby_entities):
         """Update the animal's position and behavior based on its state."""
@@ -87,47 +91,63 @@ class Animal(pygame.sprite.Sprite):
             return
 
         # Get terrain effects for current position
-        grid_x = int(self.x // 8)
-        grid_y = int(self.y // 8)
-        terrain = world_grid[grid_y][grid_x]
-        terrain_effects = environment.get_environment_effects(grid_x, grid_y)
-        
-        # Apply terrain movement modifier
-        effective_speed = self.speed * terrain_effects['movement_speed']
-        
-        # If part of a team, follow team formation
-        if self.team:
-            target_pos = self.team.get_target_position(self)
-            if target_pos:
-                dx = target_pos[0] - self.x
-                dy = target_pos[1] - self.y
-                dist = math.sqrt(dx*dx + dy*dy)
-                
-                if dist > 5:  # Only move if not at position
-                    # Calculate movement with terrain effect
-                    move_speed = effective_speed * dt
-                    move_x = (dx/dist) * move_speed
-                    move_y = (dy/dist) * move_speed
+        try:
+            grid_x = max(0, min(int(self.x // 8), len(world_grid[0]) - 1))
+            grid_y = max(0, min(int(self.y // 8), len(world_grid) - 1))
+            terrain = world_grid[grid_y][grid_x]
+            terrain_effects = environment.get_environment_effects(grid_x, grid_y)
+            
+            # Update health based on terrain compatibility
+            self.can_survive_in(terrain)  # This updates terrain_health_effect
+            health_change = self.terrain_health_effect * dt * 5  # 5 health points per second
+            self.health = min(self.max_health, max(0, self.health + health_change))
+            
+            # Apply terrain movement modifier
+            effective_speed = self.speed * terrain_effects['movement_speed']
+            if terrain not in self.get_optimal_terrains():
+                effective_speed *= 0.5  # Slower in non-optimal terrain
+            
+            # If part of a team, follow team formation
+            if self.team:
+                target_pos = self.team.get_target_position(self)
+                if target_pos:
+                    dx = target_pos[0] - self.x
+                    dy = target_pos[1] - self.y
+                    dist = math.sqrt(dx*dx + dy*dy)
                     
-                    # Try to move to new position
-                    new_x = self.x + move_x
-                    new_y = self.y + move_y
-                    
-                    if self._is_valid_position(new_x, new_y, world_grid):
-                        self.x = new_x
-                        self.y = new_y
-        else:
-            # Independent movement
-            self._update_independent(dt, effective_speed, world_grid)
+                    if dist > 5:  # Only move if not at position
+                        # Calculate movement with terrain effect
+                        move_speed = effective_speed * dt
+                        move_x = (dx/dist) * move_speed
+                        move_y = (dy/dist) * move_speed
+                        
+                        # Try to move to new position
+                        new_x = self.x + move_x
+                        new_y = self.y + move_y
+                        
+                        if self._is_valid_position(new_x, new_y, world_grid):
+                            self.x = new_x
+                            self.y = new_y
+            else:
+                # Independent movement
+                self._update_independent(dt, effective_speed, world_grid)
 
-        # Clamp position to world bounds
-        max_x = (len(world_grid[0]) - 1) * 8
-        max_y = (len(world_grid) - 1) * 8
-        self.x = max(0, min(self.x, max_x))
-        self.y = max(0, min(self.y, max_y))
-        
-        # Update sprite position
-        self.rect.center = (self.x, self.y)
+            # Clamp position to world bounds with margin
+            margin = 8  # One tile margin
+            max_x = (len(world_grid[0]) - 2) * 8
+            max_y = (len(world_grid) - 2) * 8
+            self.x = max(margin, min(self.x, max_x))
+            self.y = max(margin, min(self.y, max_y))
+            
+            # Update sprite position
+            self.rect.center = (self.x, self.y)
+            
+        except IndexError as e:
+            print(f"Warning: Animal {self.name} at invalid position ({self.x}, {self.y}), resetting to safe position")
+            # Reset to a safe position
+            self.x = max(32, min(self.x, (len(world_grid[0]) - 2) * 8))
+            self.y = max(32, min(self.y, (len(world_grid) - 2) * 8))
+            self.rect.center = (self.x, self.y)
 
     def _update_independent(self, dt: float, speed: float, world_grid) -> None:
         """Handle movement when not part of a team."""
@@ -189,20 +209,95 @@ class Animal(pygame.sprite.Sprite):
 
     def can_survive_in(self, terrain_type: str) -> bool:
         """Check if the animal can survive in the given terrain."""
-        # More flexible terrain compatibility
-        if terrain_type == self.preferred_habitat:
-            return True
+        habitat_str = self.attributes.get('Habitat', '').lower()
         
-        # Allow movement through adjacent terrain types
-        compatible_terrains = {
-            'grassland': ['forest', 'desert'],
-            'forest': ['grassland', 'mountain'],
-            'mountain': ['forest', 'grassland'],
-            'desert': ['grassland'],
-            'aquatic': ['grassland']  # Allow some land movement for aquatic animals
+        # Direct terrain mappings
+        terrain_mappings = {
+            'aquatic': ['ocean', 'water', 'marine', 'coastal', 'river', 'lake'],
+            'forest': ['forest', 'woodland', 'rainforest', 'jungle'],
+            'mountain': ['mountain', 'alpine', 'highland'],
+            'desert': ['desert', 'arid', 'sand'],
+            'grassland': ['grassland', 'savanna', 'prairie', 'plain'],
+            'wetland': ['swamp', 'marsh', 'wetland', 'mangrove']
         }
         
-        return terrain_type in compatible_terrains.get(self.preferred_habitat, [])
+        # Find primary terrain type from habitat
+        primary_terrain = 'grassland'  # Default
+        for terrain, keywords in terrain_mappings.items():
+            if any(keyword in habitat_str for keyword in keywords):
+                primary_terrain = terrain
+                break
+        
+        self.preferred_habitat = primary_terrain
+        
+        # Define terrain compatibility levels
+        terrain_compatibility = {
+            'aquatic': {
+                'optimal': ['aquatic'],
+                'survivable': ['wetland'],
+                'harmful': ['grassland', 'forest', 'desert', 'mountain']
+            },
+            'forest': {
+                'optimal': ['forest'],
+                'survivable': ['grassland', 'wetland'],
+                'harmful': ['desert', 'mountain', 'aquatic']
+            },
+            'mountain': {
+                'optimal': ['mountain'],
+                'survivable': ['forest', 'grassland'],
+                'harmful': ['desert', 'aquatic', 'wetland']
+            },
+            'desert': {
+                'optimal': ['desert'],
+                'survivable': ['grassland'],
+                'harmful': ['forest', 'mountain', 'aquatic', 'wetland']
+            },
+            'grassland': {
+                'optimal': ['grassland'],
+                'survivable': ['forest', 'desert'],
+                'harmful': ['mountain', 'aquatic', 'wetland']
+            },
+            'wetland': {
+                'optimal': ['wetland'],
+                'survivable': ['aquatic', 'grassland'],
+                'harmful': ['desert', 'mountain']
+            }
+        }
+        
+        # Get compatibility for current terrain
+        compatibility = terrain_compatibility.get(self.preferred_habitat, {})
+        if terrain_type in compatibility.get('optimal', []):
+            self.terrain_health_effect = 1.0  # Health regeneration
+            return True
+        elif terrain_type in compatibility.get('survivable', []):
+            self.terrain_health_effect = 0.0  # No health change
+            return True
+        elif terrain_type in compatibility.get('harmful', []):
+            self.terrain_health_effect = -1.0  # Health decrease
+            return False
+        
+        return False
+
+    def get_optimal_terrains(self) -> List[str]:
+        """Get list of optimal terrains for this animal."""
+        habitat_str = self.attributes.get('Habitat', '').lower()
+        
+        # Direct terrain mappings
+        terrain_mappings = {
+            'aquatic': ['ocean', 'water', 'marine', 'coastal', 'river', 'lake'],
+            'forest': ['forest', 'woodland', 'rainforest', 'jungle'],
+            'mountain': ['mountain', 'alpine', 'highland'],
+            'desert': ['desert', 'arid', 'sand'],
+            'grassland': ['grassland', 'savanna', 'prairie', 'plain'],
+            'wetland': ['swamp', 'marsh', 'wetland', 'mangrove']
+        }
+        
+        optimal_terrains = []
+        for terrain, keywords in terrain_mappings.items():
+            if any(keyword in habitat_str for keyword in keywords):
+                optimal_terrains.append(terrain)
+        
+        return optimal_terrains if optimal_terrains else ['grassland']  # Default to grassland
 
     #########################
     # 4. Rendering
