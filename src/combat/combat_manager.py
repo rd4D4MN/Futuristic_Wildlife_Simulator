@@ -17,54 +17,90 @@ class CombatManager:
             'grassland': {'grassland': 1.1, 'default': 1.0}
         }
         
-        # Enhanced combat traits with special abilities
+        # Enhanced combat traits with cooldown-based abilities
         self.combat_traits = {
             'heat_adapted': {
                 'terrain_bonus': {'desert': 1.3},
                 'special_ability': 'heat_burst',
-                'ability_effect': {'damage': 1.4, 'cooldown': 5.0}
+                'ability_effect': {
+                    'damage': 1.4,
+                    'cooldown': 5.0,
+                    'status_effect': 'burning',
+                    'effect_duration': 3.0
+                }
             },
             'cold_adapted': {
                 'terrain_bonus': {'mountain': 1.3},
                 'special_ability': 'frost_armor',
-                'ability_effect': {'defense': 1.5, 'duration': 3.0}
+                'ability_effect': {
+                    'defense': 1.5,
+                    'cooldown': 8.0,
+                    'status_effect': 'frozen',
+                    'effect_duration': 2.0
+                }
             },
             'pack_hunter': {
                 'terrain_bonus': {'grassland': 1.2},
                 'special_ability': 'coordinated_strike',
-                'ability_effect': {'damage': 1.2, 'team_bonus': True}
+                'ability_effect': {
+                    'damage': 1.2,
+                    'cooldown': 6.0,
+                    'team_bonus': True,
+                    'combo_multiplier': 1.5
+                }
             },
             'ambush_predator': {
                 'terrain_bonus': {'forest': 1.2},
                 'special_ability': 'surprise_attack',
-                'ability_effect': {'first_strike': True, 'damage': 1.6}
+                'ability_effect': {
+                    'first_strike': True,
+                    'damage': 1.6,
+                    'cooldown': 10.0,
+                    'status_effect': 'stunned',
+                    'effect_duration': 1.5
+                }
             },
             'aquatic_master': {
                 'terrain_bonus': {'aquatic': 1.4},
                 'special_ability': 'water_surge',
-                'ability_effect': {'damage': 1.3, 'mobility': 1.5}
-            },
-            'none': {
-                'terrain_bonus': {},
-                'special_ability': None,
-                'ability_effect': {}
+                'ability_effect': {
+                    'damage': 1.3,
+                    'cooldown': 7.0,
+                    'mobility': 1.5,
+                    'status_effect': 'slowed',
+                    'effect_duration': 2.0
+                }
             }
         }
         
-        # Natural weapons bonuses
-        self.weapon_bonuses = {
-            'claws': 1.2,
-            'fangs': 1.2,
-            'horns': 1.3,
-            'tusks': 1.3,
-            'bite': 1.1,
-            'tail': 1.1,
-            'trunk': 1.2,
-            'ram': 1.2,
-            'talons': 1.3,
-            'beak': 1.1,
-            'tentacles': 1.2
+        # Status effects system
+        self.status_effects = {
+            'burning': {'damage_over_time': 5, 'armor_reduction': 0.2},
+            'frozen': {'speed_reduction': 0.5, 'defense_bonus': 0.3},
+            'stunned': {'can_attack': False, 'defense_reduction': 0.3},
+            'slowed': {'speed_reduction': 0.3, 'dodge_reduction': 0.2},
+            'bleeding': {'damage_over_time': 3, 'stamina_drain': 10}
         }
+        
+        # Enhanced weapon system with combo potential
+        self.weapon_bonuses = {
+            'claws': {'damage': 1.2, 'combo_potential': ['bite', 'talons']},
+            'fangs': {'damage': 1.2, 'status_effect': 'bleeding'},
+            'horns': {'damage': 1.3, 'knockback': True},
+            'tusks': {'damage': 1.3, 'armor_penetration': 0.2},
+            'bite': {'damage': 1.1, 'combo_potential': ['claws']},
+            'tail': {'damage': 1.1, 'area_effect': True},
+            'trunk': {'damage': 1.2, 'grab_ability': True},
+            'ram': {'damage': 1.2, 'stun_chance': 0.2},
+            'talons': {'damage': 1.3, 'combo_potential': ['claws', 'bite']},
+            'beak': {'damage': 1.1, 'precision': True},
+            'tentacles': {'damage': 1.2, 'multi_target': True}
+        }
+
+        # Combat state tracking
+        self.active_abilities = {}  # Track ability cooldowns
+        self.active_status_effects = {}  # Track status effects
+        self.combo_windows = {}  # Track potential combo opportunities
 
     def resolve_battle(self, team1: Team, team2: Team) -> Dict:
         """Resolve battle between teams with enhanced combat mechanics."""

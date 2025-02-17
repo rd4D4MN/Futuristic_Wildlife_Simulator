@@ -12,18 +12,73 @@ class EvolutionManager:
         """Initialize evolution manager with animal data."""
         self.animal_data = processed_animals_df
         self.population_caps = self._calculate_population_caps()
-        self.breeding_cooldowns = {}  # Track breeding cooldowns by species
-        self.generation_counters = {}  # Track generations by species
-        self.species_stats = {}  # Track evolutionary stats by species
+        self.breeding_cooldowns = {}
+        self.generation_counters = {}
+        self.species_stats = {}
         
         # Enhanced evolution parameters
-        self.min_breeding_age = 100  # frames
+        self.min_breeding_age = 100
         self.base_reproduction_chance = 0.1
-        self.environmental_pressure = 0.8  # Higher means more pressure
-        self.social_breeding_threshold = 0.6  # Minimum social score for group breeding
-        self.maturity_impact = 0.2  # Impact of maturity on breeding success
+        self.environmental_pressure = 0.8
+        self.social_breeding_threshold = 0.6
+        self.maturity_impact = 0.2
         
-        # Enhanced mutation rates with dynamic scaling
+        # Enhanced genetic system
+        self.trait_weights = {
+            'attack_multiplier': {'combat': 1.0, 'survival': 0.5},
+            'armor_rating': {'combat': 0.8, 'survival': 0.7},
+            'agility_score': {'combat': 0.7, 'survival': 0.8},
+            'stamina_rating': {'survival': 1.0, 'combat': 0.6},
+            'social_score': {'survival': 0.9, 'combat': 0.3},
+            'maturity_score': {'survival': 0.8}
+        }
+        
+        # Environmental adaptation system
+        self.environment_factors = {
+            'temperature': {'hot': 0.8, 'cold': -0.8},
+            'humidity': {'high': 0.6, 'low': -0.6},
+            'predation': {'high': 0.9, 'low': -0.3},
+            'competition': {'high': 0.7, 'low': -0.4},
+            'food_availability': {'high': -0.5, 'low': 0.8}
+        }
+        
+        # Trait specialization tracking
+        self.specialization_thresholds = {
+            'combat': {'threshold': 0.8, 'traits': ['attack_multiplier', 'armor_rating']},
+            'survival': {'threshold': 0.8, 'traits': ['stamina_rating', 'agility_score']},
+            'social': {'threshold': 0.8, 'traits': ['social_score', 'maturity_score']}
+        }
+        
+        # Population dynamics
+        self.population_factors = {
+            'Critically Endangered': {
+                'mutation_rate': 1.5,
+                'breeding_boost': 1.3,
+                'survival_pressure': 0.7
+            },
+            'Endangered': {
+                'mutation_rate': 1.3,
+                'breeding_boost': 1.2,
+                'survival_pressure': 0.8
+            },
+            'Vulnerable': {
+                'mutation_rate': 1.1,
+                'breeding_boost': 1.1,
+                'survival_pressure': 0.9
+            },
+            'Near Threatened': {
+                'mutation_rate': 1.0,
+                'breeding_boost': 1.0,
+                'survival_pressure': 1.0
+            },
+            'Least Concern': {
+                'mutation_rate': 0.9,
+                'breeding_boost': 0.9,
+                'survival_pressure': 1.1
+            }
+        }
+        
+        # Adaptive mutation system
         self.base_mutation_rates = {
             'attack_multiplier': 0.1,
             'armor_rating': 0.08,
@@ -33,13 +88,13 @@ class EvolutionManager:
             'maturity_score': 0.03
         }
         
-        # Adaptive mutation scaling
-        self.mutation_pressure = 1.0  # Dynamic mutation pressure
-        self.min_mutation_pressure = 0.5
-        self.max_mutation_pressure = 2.0
+        # Dynamic adaptation tracking
+        self.adaptation_history = {}
+        self.specialization_history = {}
+        self.environmental_history = {}
         
-        # Generation tracking
-        self.generation_stats = {}  # Track stats per generation
+        # Generation tracking with enhanced metrics
+        self.generation_stats = {}
         
     def _calculate_population_caps(self) -> Dict[str, int]:
         """Calculate population caps based on conservation status and predator pressure."""
@@ -124,92 +179,153 @@ class EvolutionManager:
         return random.random() < chance
         
     def create_offspring(self, parent1: 'Animal', parent2: 'Animal') -> Dict:
-        """Enhanced offspring creation with adaptive mutation rates."""
-        # Ensure both parents have genomes
-        if not parent1.genome:
-            parent1.genome = self.create_initial_genome(parent1.original_data)
-        if not parent2.genome:
-            parent2.genome = self.create_initial_genome(parent2.original_data)
-            
-        # Calculate mutation pressure based on environmental factors
+        """Enhanced offspring creation with sophisticated genetic algorithms."""
+        if not parent1.genome or not parent2.genome:
+            self._ensure_genomes(parent1, parent2)
+        
         species = parent1.name
         current_stats = self.get_species_stats(species)
         
-        if current_stats:
-            # Adjust mutation pressure based on population trend and battle performance
-            population_trend = current_stats['population_trend']
-            self.mutation_pressure = max(self.min_mutation_pressure,
-                min(self.max_mutation_pressure,
-                    self.mutation_pressure * (1 - population_trend * 0.1)))
-            
-            # Increase mutation pressure if species is struggling
-            if current_stats['avg_attack'] < 1.0 or current_stats['avg_armor'] < 1.0:
-                self.mutation_pressure *= 1.2
+        # Calculate environmental pressures
+        env_factors = self._calculate_environmental_factors(parent1)
         
-        # Apply mutation pressure to base rates
-        current_mutation_rates = {
-            trait: rate * self.mutation_pressure
-            for trait, rate in self.base_mutation_rates.items()
-        }
+        # Get population factors based on conservation status
+        pop_factors = self.population_factors.get(
+            parent1.original_data.get('Conservation Status', 'Least Concern'),
+            self.population_factors['Least Concern']
+        )
         
-        # Perform crossover with enhanced trait inheritance
-        child_genome = parent1.genome.crossover(parent2.genome)
+        # Calculate adaptive mutation rates
+        mutation_rates = self._calculate_adaptive_mutation_rates(
+            species, current_stats, env_factors, pop_factors
+        )
         
-        # Apply mutations with adaptive rates
-        for gene_name, mutation_rate in current_mutation_rates.items():
-            if gene_name in child_genome.genes:
-                if random.random() < mutation_rate:
-                    # Enhanced mutation based on parent traits
-                    parent_avg = (parent1.genome.genes[gene_name].value + 
-                                parent2.genome.genes[gene_name].value) / 2
-                    mutation_range = 0.2 * self.mutation_pressure
-                    mutation = random.uniform(-mutation_range, mutation_range)
-                    
-                    # Ensure social scores don't mutate too drastically
-                    if gene_name == 'social_score':
-                        mutation *= 0.5
-                    
-                    new_value = parent_avg * (1 + mutation)
-                    child_genome.genes[gene_name].value = max(0.1, min(2.0, new_value))
+        # Perform enhanced crossover
+        child_genome = self._perform_enhanced_crossover(
+            parent1.genome, parent2.genome, mutation_rates, env_factors
+        )
         
-        # Update generation counter and cooldown
-        self.generation_counters[species] = self.generation_counters.get(species, 0) + 1
+        # Track adaptations and specializations
+        self._update_adaptation_tracking(species, child_genome, env_factors)
         
-        # Set breeding cooldown based on generation time
-        species_key = f"{parent1.name}_{id(parent1)}_{id(parent2)}"
-        generation_time = float(parent1.generation_time)
-        base_cooldown = max(100, generation_time * 60)  # Convert to frames
+        # Update generation stats
+        self._update_generation_stats(species, child_genome)
         
-        # Modify cooldown based on maturity score
-        maturity_modifier = 1 - (parent1.maturity_score + parent2.maturity_score) * 0.2
-        self.breeding_cooldowns[species_key] = base_cooldown * maturity_modifier
-        
-        # Track evolutionary stats
-        if species not in self.species_stats:
-            self.species_stats[species] = {
-                'generations': 1,
-                'avg_attack': [],
-                'avg_armor': [],
-                'avg_agility': [],
-                'avg_social': [],
-                'avg_maturity': [],
-                'population_history': []
-            }
-        
-        stats = self.species_stats[species]
-        stats['generations'] += 1
-        stats['avg_attack'].append(child_genome.genes['attack_multiplier'].value)
-        stats['avg_armor'].append(child_genome.genes['armor_rating'].value)
-        stats['avg_agility'].append(child_genome.genes['agility_score'].value)
-        stats['avg_social'].append(child_genome.genes['social_score'].value)
-        stats['avg_maturity'].append(child_genome.genes['maturity_score'].value)
-        
-        # Return offspring traits
         return {
             'genome': child_genome,
             'generation': self.generation_counters.get(species, 1)
         }
+
+    def _calculate_environmental_factors(self, animal: 'Animal') -> Dict:
+        """Calculate current environmental pressures and their impact."""
+        factors = {}
         
+        # Get terrain-based factors
+        terrain = self._get_terrain_at_position(animal)
+        if terrain == 'desert':
+            factors['temperature'] = 'hot'
+            factors['humidity'] = 'low'
+        elif terrain == 'mountain':
+            factors['temperature'] = 'cold'
+            factors['humidity'] = 'low'
+        elif terrain == 'forest':
+            factors['humidity'] = 'high'
+            factors['food_availability'] = 'high'
+        
+        # Calculate predation pressure
+        factors['predation'] = 'high' if animal.predator_pressure > 0.6 else 'low'
+        
+        # Calculate competition based on population
+        species_pop = len([a for a in self.animals if a.name == animal.name])
+        factors['competition'] = 'high' if species_pop > self.population_caps[animal.name] * 0.8 else 'low'
+        
+        return factors
+
+    def _calculate_adaptive_mutation_rates(self, species: str, stats: Dict, env_factors: Dict, pop_factors: Dict) -> Dict:
+        """Calculate mutation rates adapted to current conditions."""
+        rates = self.base_mutation_rates.copy()
+        
+        # Apply population factor
+        base_modifier = pop_factors['mutation_rate']
+        
+        # Apply environmental pressure modifications
+        for factor, value in env_factors.items():
+            modifier = self.environment_factors[factor].get(value, 0)
+            base_modifier *= (1 + abs(modifier) * 0.1)
+        
+        # Apply specific trait modifications based on environmental needs
+        for trait, rate in rates.items():
+            # Get trait weights for current conditions
+            weights = self.trait_weights[trait]
+            
+            # Calculate environmental need for this trait
+            env_need = sum(
+                weights.get(category, 0) * self.environment_factors[factor].get(value, 0)
+                for factor, value in env_factors.items()
+                for category in ['combat', 'survival']
+            )
+            
+            # Modify rate based on need
+            rates[trait] = rate * base_modifier * (1 + env_need)
+        
+        return rates
+
+    def _perform_enhanced_crossover(self, genome1: Genome, genome2: Genome, mutation_rates: Dict, env_factors: Dict) -> Genome:
+        """Perform enhanced crossover with environmental adaptation."""
+        child_genes = {}
+        
+        for gene_name in genome1.genes:
+            if gene_name not in genome2.genes:
+                child_genes[gene_name] = genome1.genes[gene_name].copy()
+                continue
+            
+            # Calculate environmental preference for each parent's gene
+            parent1_fitness = self._calculate_gene_fitness(genome1.genes[gene_name], env_factors)
+            parent2_fitness = self._calculate_gene_fitness(genome2.genes[gene_name], env_factors)
+            
+            # Select gene based on fitness
+            if parent1_fitness > parent2_fitness:
+                selected_gene = genome1.genes[gene_name]
+                fitness_ratio = parent1_fitness / (parent1_fitness + parent2_fitness)
+            else:
+                selected_gene = genome2.genes[gene_name]
+                fitness_ratio = parent2_fitness / (parent1_fitness + parent2_fitness)
+            
+            # Create child gene with potential mutation
+            child_gene = selected_gene.copy()
+            
+            # Apply mutation with adaptive rate
+            if random.random() < mutation_rates[gene_name]:
+                mutation_range = 0.2 * (1 - fitness_ratio)  # Lower fitness allows bigger mutations
+                mutation = random.uniform(-mutation_range, mutation_range)
+                child_gene.value = max(0.1, min(2.0, child_gene.value * (1 + mutation)))
+            
+            child_genes[gene_name] = child_gene
+        
+        return Genome(child_genes)
+
+    def _calculate_gene_fitness(self, gene: Gene, env_factors: Dict) -> float:
+        """Calculate how well a gene's value fits current environmental conditions."""
+        fitness = 1.0
+        weights = self.trait_weights.get(gene.name, {})
+        
+        for factor, value in env_factors.items():
+            factor_impact = self.environment_factors[factor].get(value, 0)
+            
+            # Apply impact based on trait weights
+            if factor_impact > 0:  # Positive pressure
+                if 'combat' in weights and factor in ['predation', 'competition']:
+                    fitness *= 1 + (factor_impact * weights['combat'] * gene.value)
+                if 'survival' in weights and factor in ['temperature', 'humidity', 'food_availability']:
+                    fitness *= 1 + (factor_impact * weights['survival'] * gene.value)
+            else:  # Negative pressure
+                if 'combat' in weights and factor in ['predation', 'competition']:
+                    fitness *= 1 + (abs(factor_impact) * weights['combat'] * (2 - gene.value))
+                if 'survival' in weights and factor in ['temperature', 'humidity', 'food_availability']:
+                    fitness *= 1 + (abs(factor_impact) * weights['survival'] * (2 - gene.value))
+        
+        return fitness
+
     def update(self, dt: float):
         """Update breeding cooldowns and environmental factors."""
         # Update breeding cooldowns

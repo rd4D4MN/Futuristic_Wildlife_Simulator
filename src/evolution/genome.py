@@ -18,6 +18,15 @@ class Gene:
             return max(0, self.value * (1 + change))
         return self.value
 
+    def copy(self) -> 'Gene':
+        """Create a deep copy of the gene."""
+        return Gene(
+            name=self.name,
+            value=self.value,
+            mutation_rate=self.mutation_rate,
+            mutation_range=self.mutation_range
+        )
+
 @dataclass
 class Genome:
     """Collection of genes that define an animal's traits."""

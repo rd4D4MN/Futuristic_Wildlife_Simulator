@@ -11,14 +11,14 @@ class Team:
         self.members: List['Animal'] = []
         
         # Timing and cooldowns first
-        self.battle_cooldown = 180  # Reduced from 300 (3 seconds instead of 5)
-        self.last_battle_frame = -self.battle_cooldown  # Allow immediate first battle
+        self.battle_cooldown = 180
+        self.last_battle_frame = -self.battle_cooldown
         self.search_timer = 0
         self.search_interval = 5
         self.last_cohesion_check = 0
-        self.cohesion_check_interval = 1.0
+        self.cohesion_check_interval = 0.5  # More frequent checks
         self.last_debug_time = 0
-        self.debug_interval = 1.0
+        self.debug_interval = 5.0
         
         # Team appearance and formation
         self.color = (
@@ -36,8 +36,9 @@ class Team:
         self.aggression = random.uniform(0.8, 2.0)
         
         # Movement and positioning
-        self.max_distance_from_leader = 400
-        self.formation_radius = 50
+        self.max_distance_from_leader = 300  # Reduced from 400
+        self.base_formation_radius = 50  # Base radius for formation
+        self.max_formation_radius = 200  # Maximum formation radius
         self.formation_positions = {}
         self.patrol_points = []
         self.current_patrol_index = 0
@@ -48,12 +49,13 @@ class Team:
         self.disbanding = False
         self.disband_timer = 0
         self.max_disband_time = 10.0
-        self.max_spread = 400
+        self.max_spread = 400  # Reduced back to 400
         
         # Debug and tracking
         self.debug_logs = []
         self.movement_history = []
         self.max_history = 10
+        self.cohesion_violations = 0  # Track consecutive cohesion violations
         
     def get_total_health(self) -> float:
         """Calculate total health of team including leader and active members."""
@@ -372,16 +374,16 @@ class Team:
                 max_distance = dist
                 furthest_member = i
 
-        if max_distance > self.max_spread:
-            entity_type = "Leader" if furthest_member == len(positions) - 1 else f"Member {furthest_member}"
-            self._log_debug(f"Team spread check failed: {entity_type} at distance {max_distance:.2f} > {self.max_spread}")
-            return False
+        # if max_distance > self.max_spread:
+        #     entity_type = "Leader" if furthest_member == len(positions) - 1 else f"Member {furthest_member}"
+        #     self._log_debug(f"Team spread check failed: {entity_type} at distance {max_distance:.2f} > {self.max_spread}")
+        #     return False
 
         return True
 
     def _log_debug(self, message: str) -> None:
         """Add timestamped debug message for critical events only."""
-        # Only log critical events
+        # Only log critical events and reduce frequency
         critical_keywords = ['disbanded', 'failed', 'recovered']
         
         if not any(keyword in message.lower() for keyword in critical_keywords):
@@ -390,8 +392,13 @@ class Team:
         current_time = pygame.time.get_ticks() / 1000.0
         if current_time - self.last_debug_time >= self.debug_interval:
             self.last_debug_time = current_time
-            debug_entry = f"[{current_time:.1f}s] Team {self.get_leader_name()}: {message}"
-            print(debug_entry)  # Print only critical messages
+            # Only log if spread is significantly over the limit
+            if 'spread check failed' in message:
+                distance = float(message.split('distance ')[1].split(' >')[0])
+                if distance > self.max_spread * 1.5:  # Only log if significantly over limit
+                    print(f"[{current_time:.1f}s] Team {self.get_leader_name()}: {message}")
+            else:
+                print(f"[{current_time:.1f}s] Team {self.get_leader_name()}: {message}")
             
     def _disband_team(self) -> None:
         """Handle team disbanding."""

@@ -659,11 +659,27 @@ class GameState:
 
     def cleanup(self) -> None:
         """Clean up resources when game ends."""
-        self.resource_manager.cleanup()
-        self.ui_manager.cleanup()
-        for animal in self.animals:
-            animal.cleanup()
-        pygame.quit()
+        try:
+            # Clean up teams first
+            for team in self.teams:
+                if hasattr(team, '_disband_team'):
+                    team._disband_team()
+            
+            # Clean up animals
+            for animal in self.animals:
+                if hasattr(animal, 'cleanup'):
+                    animal.cleanup()
+            
+            # Clean up managers
+            if hasattr(self, 'resource_manager'):
+                self.resource_manager.cleanup()
+            if hasattr(self, 'ui_manager'):
+                self.ui_manager.cleanup()
+            
+            # Quit pygame last
+            pygame.quit()
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
 
     def handle_input(self) -> bool:
         """Handle user input."""
@@ -678,7 +694,7 @@ class GameState:
     def _handle_keydown(self, event: pygame.event.Event) -> None:
         """Handle keydown events."""
         if event.key == pygame.K_ESCAPE:
-            pygame.quit()
+            self.running = False  # Set running to False instead of directly quitting
         elif event.key == pygame.K_h:
             self.ui_manager.toggle_ui_element('health_bars')
         elif event.key == pygame.K_m:
@@ -738,9 +754,10 @@ def main():
     running = True
 
     try:
-        while running:
+        while game.running:  # Use game.running instead of separate running variable
             dt = min(game.clock.tick(60) / 1000.0, 0.1)
-            running = game.handle_input()
+            if not game.handle_input():  # If handle_input returns False, break the loop
+                break
             game.update(dt)
             game.draw()
 
