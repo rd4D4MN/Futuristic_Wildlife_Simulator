@@ -205,6 +205,40 @@ class EvolutionManager:
             parent1.genome, parent2.genome, mutation_rates, env_factors
         )
         
+        # Inherit or evolve combat traits
+        parent1_traits = parent1.combat_traits.split(',') if ',' in parent1.combat_traits else [parent1.combat_traits]
+        parent2_traits = parent2.combat_traits.split(',') if ',' in parent2.combat_traits else [parent2.combat_traits]
+        
+        # Filter out 'none' traits
+        parent1_traits = [t for t in parent1_traits if t != 'none']
+        parent2_traits = [t for t in parent2_traits if t != 'none']
+        
+        # Combine unique traits from both parents
+        combined_traits = list(set(parent1_traits + parent2_traits))
+        
+        # Chance to gain a new trait based on environment
+        if random.random() < 0.1:  # 10% chance
+            possible_new_traits = []
+            if 'temperature' in env_factors:
+                if env_factors['temperature'] == 'hot':
+                    possible_new_traits.append('heat_adapted')
+                elif env_factors['temperature'] == 'cold':
+                    possible_new_traits.append('cold_adapted')
+            
+            if 'predation' in env_factors and env_factors['predation'] == 'high':
+                possible_new_traits.append('ambush_predator')
+            
+            if len(self.members) > 3:  # If part of a larger group
+                possible_new_traits.append('pack_hunter')
+            
+            if possible_new_traits and len(combined_traits) < 2:  # Limit to 2 traits max
+                new_trait = random.choice(possible_new_traits)
+                if new_trait not in combined_traits:
+                    combined_traits.append(new_trait)
+        
+        # Create the final combat traits string
+        combat_traits = ','.join(combined_traits) if combined_traits else 'none'
+        
         # Track adaptations and specializations
         self._update_adaptation_tracking(species, child_genome, env_factors)
         
@@ -213,7 +247,8 @@ class EvolutionManager:
         
         return {
             'genome': child_genome,
-            'generation': self.generation_counters.get(species, 1)
+            'generation': self.generation_counters.get(species, 1),
+            'combat_traits': combat_traits  # Add combat traits to offspring data
         }
 
     def _calculate_environmental_factors(self, animal: 'Animal') -> Dict:
@@ -357,3 +392,10 @@ class EvolutionManager:
             'population_trend': np.mean(np.diff(stats['population_history'][-10:])) 
                 if len(stats['population_history']) > 1 else 0
         } 
+
+    def _ensure_genomes(self, parent1: 'Animal', parent2: 'Animal') -> None:
+        """Ensure both parents have genomes, creating them if necessary."""
+        if not parent1.genome:
+            parent1.genome = self.create_initial_genome(parent1.original_data)
+        if not parent2.genome:
+            parent2.genome = self.create_initial_genome(parent2.original_data) 

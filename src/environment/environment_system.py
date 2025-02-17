@@ -43,21 +43,57 @@ class EnvironmentSystem:
         # Update time of day (complete cycle every 24 real seconds)
         self.time_of_day = (self.time_of_day + dt) % 24.0
 
-        # Periodically update weather and season
-        self._update_weather()
-        self._update_season()
+        # Update weather more frequently with more noticeable changes
+        if random.random() < 0.1:  # 10% chance each update
+            self._update_weather()
+            
+        # Update season based on time
+        if self.time_of_day < 0.1:  # Near midnight
+            self._update_season()
 
     def _update_weather(self) -> None:
-        """Gradually update weather conditions with continuity."""
+        """Update weather conditions with more dramatic changes."""
         for terrain, current_weather in self.weather_conditions.items():
             patterns = self.terrain_weather_patterns[terrain]
-            rain_delta = random.uniform(-0.01, 0.01)  # Smaller changes for readability
-            temp_delta = random.uniform(-0.5, 0.5)  # Smaller changes for readability
-            self.weather_conditions[terrain] = {
-                'precipitation': max(0, min(patterns['rain_chance'], current_weather['precipitation'] + rain_delta)),
-                'temperature': max(patterns['temp_range'][0], min(patterns['temp_range'][1], current_weather['temperature'] + temp_delta)),
-                'wind': max(0, min(30, current_weather['wind'] + random.uniform(-1, 1)))  # Smaller changes for readability
+            
+            # More dramatic weather changes
+            rain_delta = random.uniform(-0.2, 0.2)  # Increased from 0.01
+            temp_delta = random.uniform(-2.0, 2.0)  # Increased from 0.5
+            wind_delta = random.uniform(-3.0, 3.0)  # Increased from 1.0
+            
+            # Calculate new values with seasonal modifications
+            season_temp_modifier = {
+                'Summer': 5.0,
+                'Winter': -5.0,
+                'Spring': 0.0,
+                'Autumn': 0.0
+            }.get(self.season, 0.0)
+            
+            # Time of day temperature modifications
+            time_temp_modifier = -5.0 if 0 <= self.time_of_day <= 6 else \
+                               5.0 if 12 <= self.time_of_day <= 15 else 0.0
+            
+            new_weather = {
+                'precipitation': max(0, min(1.0, current_weather['precipitation'] + rain_delta)),
+                'temperature': max(patterns['temp_range'][0],
+                                 min(patterns['temp_range'][1],
+                                     current_weather['temperature'] + temp_delta + 
+                                     season_temp_modifier + time_temp_modifier)),
+                'wind': max(0, min(40, current_weather['wind'] + wind_delta))
             }
+            
+            # Add weather events
+            if random.random() < 0.05:  # 5% chance of weather events
+                if self.season == 'Summer':
+                    new_weather['temperature'] += random.uniform(2.0, 5.0)  # Heat wave
+                elif self.season == 'Winter':
+                    new_weather['temperature'] -= random.uniform(2.0, 5.0)  # Cold snap
+                elif random.random() < 0.5:
+                    new_weather['precipitation'] = min(1.0, new_weather['precipitation'] + 0.3)  # Storm
+                else:
+                    new_weather['wind'] = min(40, new_weather['wind'] + random.uniform(5.0, 10.0))  # Wind gust
+            
+            self.weather_conditions[terrain] = new_weather
 
     def _update_season(self) -> None:
         """Cycle through seasons and apply changes."""
@@ -67,35 +103,50 @@ class EnvironmentSystem:
             self.season = seasons[(current_index + 1) % len(seasons)]
 
     def get_environment_effects(self, tile_x: int, tile_y: int) -> Dict[str, float]:
-        """Get current environmental effects for a specific tile."""
+        """Get current environmental effects for a specific tile with more impactful modifiers."""
         try:
             terrain_type = self.world_grid[tile_y][tile_x]
         except IndexError:
-            # Return default effects if coordinates are invalid
             return {'movement_speed': 1.0, 'stamina_drain': 1.0, 'visibility': 1.0}
 
-        base_effects = self.terrain_effects.get(terrain_type, {'movement_speed': 1.0, 'stamina_drain': 1.0, 'visibility': 1.0})
-        weather = self.weather_conditions.get(terrain_type, {'precipitation': 0, 'temperature': 20, 'wind': 0})
+        base_effects = self.terrain_effects.get(terrain_type, 
+            {'movement_speed': 1.0, 'stamina_drain': 1.0, 'visibility': 1.0})
+        weather = self.weather_conditions.get(terrain_type, 
+            {'precipitation': 0, 'temperature': 20, 'wind': 0})
 
-        # Apply weather modifications
+        # Apply more impactful weather modifications
         modified_effects = base_effects.copy()
 
-        # Heavy rain reduces movement speed and visibility
-        if weather['precipitation'] > 0.7:
+        # Precipitation effects
+        if weather['precipitation'] > 0.3:  # Lowered threshold
+            modified_effects['movement_speed'] *= max(0.5, 1.0 - weather['precipitation'])
+            modified_effects['visibility'] *= max(0.4, 1.0 - weather['precipitation'])
+
+        # Temperature effects
+        temp = weather['temperature']
+        if temp > 30 or temp < 5:
+            modified_effects['stamina_drain'] *= 1.5
             modified_effects['movement_speed'] *= 0.8
-            modified_effects['visibility'] *= 0.6
+        
+        # Wind effects
+        if weather['wind'] > 15:  # Lowered threshold
+            wind_factor = min(1.0, weather['wind'] / 40.0)
+            modified_effects['movement_speed'] *= max(0.6, 1.0 - wind_factor)
+            modified_effects['visibility'] *= max(0.7, 1.0 - wind_factor)
 
-        # Extreme temperatures increase stamina drain
-        if weather['temperature'] > 35 or weather['temperature'] < 0:
+        # Time of day effects (more pronounced)
+        hour = self.time_of_day
+        if hour < 6 or hour > 18:  # Night time
+            modified_effects['visibility'] *= 0.4  # Darker nights
+            modified_effects['movement_speed'] *= 0.7  # Slower at night
+        elif 6 <= hour < 8 or 16 <= hour <= 18:  # Dawn/Dusk
+            modified_effects['visibility'] *= 0.7  # Reduced visibility during twilight
+
+        # Seasonal effects
+        if self.season == 'Winter':
+            modified_effects['movement_speed'] *= 0.8
             modified_effects['stamina_drain'] *= 1.3
-
-        # Strong winds affect movement speed
-        if weather['wind'] > 20:
-            modified_effects['movement_speed'] *= 0.9
-
-        # Time of day effects
-        if self.time_of_day < 6 or self.time_of_day > 18:  # Night time
-            modified_effects['visibility'] *= 0.6
-            modified_effects['movement_speed'] *= 0.9
+        elif self.season == 'Summer':
+            modified_effects['stamina_drain'] *= 1.2
 
         return modified_effects

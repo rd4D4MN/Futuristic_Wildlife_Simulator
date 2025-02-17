@@ -15,6 +15,7 @@ class Robot(pygame.sprite.Sprite):
         self.movement_smoothing = 0.8  # Add movement smoothing
         self.last_dx = 0
         self.last_dy = 0
+        self.name = f"Robot-{id(self)%1000:03d}"  # Add consistent name
         self.image = self._load_sprite()
         self.rect = self.image.get_rect()
         self.rect.center = (self.x, self.y)

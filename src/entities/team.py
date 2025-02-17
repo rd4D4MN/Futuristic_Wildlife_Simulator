@@ -79,7 +79,7 @@ class Team:
             return "No Leader"
             
         if isinstance(self.leader, Robot):
-            return f"Robot-{id(self.leader)%1000:03d}"
+            return self.leader.name
         
         # Animal leader
         return self.leader.name

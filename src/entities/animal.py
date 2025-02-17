@@ -50,7 +50,12 @@ class Animal(pygame.sprite.Sprite):
         
         # Environmental attributes
         self.habitat = str(data.get('Habitat', 'Grassland'))
-        self.combat_traits = str(data.get('Combat_Traits', 'none'))
+        # Handle combat traits with proper validation
+        combat_traits = data.get('Combat_Traits', 'none')
+        if isinstance(combat_traits, list):
+            self.combat_traits = ','.join(combat_traits)
+        else:
+            self.combat_traits = str(combat_traits)
         self.natural_weapons = self._parse_natural_weapons(data.get('Natural_Weapons', ''))
         
         # Apply genome if provided
@@ -59,6 +64,10 @@ class Animal(pygame.sprite.Sprite):
             # Revalidate health after genome application
             self.max_health = max(1.0, self.max_health)
             self.health = min(self.max_health, max(0, self.health))
+            
+        # Apply combat traits from evolution data if provided
+        if 'combat_traits' in data:
+            self.combat_traits = str(data['combat_traits'])
         
         # Visual attributes
         self.color = self._parse_color(data.get('Color', 'Brown'))

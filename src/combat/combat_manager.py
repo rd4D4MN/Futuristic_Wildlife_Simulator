@@ -19,6 +19,16 @@ class CombatManager:
         
         # Enhanced combat traits with cooldown-based abilities
         self.combat_traits = {
+            'none': {
+                'terrain_bonus': {'default': 1.0},
+                'special_ability': None,
+                'ability_effect': {
+                    'damage': 1.0,
+                    'cooldown': 0,
+                    'status_effect': None,
+                    'effect_duration': 0
+                }
+            },
             'heat_adapted': {
                 'terrain_bonus': {'desert': 1.3},
                 'special_ability': 'heat_burst',
@@ -162,8 +172,9 @@ class CombatManager:
         
         # First pass: check for team-wide abilities
         for member in team.members:
+            # Get trait data with proper default handling
             trait_data = self.combat_traits.get(member.combat_traits, self.combat_traits['none'])
-            if trait_data['special_ability']:
+            if trait_data.get('special_ability'):
                 team_abilities_active.add(trait_data['special_ability'])
         
         for member in team.members:
@@ -175,7 +186,7 @@ class CombatManager:
             habitat_mod = terrain_mods.get(member.habitat.lower(), terrain_mods['default'])
             member_strength *= habitat_mod
             
-            # Apply enhanced combat traits
+            # Apply enhanced combat traits with proper default handling
             trait_data = self.combat_traits.get(member.combat_traits, self.combat_traits['none'])
             
             # Apply terrain bonus from trait
@@ -184,7 +195,7 @@ class CombatManager:
             
             # Apply special ability effects
             ability_effect = trait_data['ability_effect']
-            if trait_data['special_ability']:
+            if trait_data.get('special_ability'):
                 # Apply individual ability effects
                 if 'damage' in ability_effect:
                     member_strength *= ability_effect['damage']
@@ -196,7 +207,8 @@ class CombatManager:
             # Apply natural weapons bonus
             weapon_mod = 1.0
             for weapon in member.natural_weapons:
-                weapon_mod = max(weapon_mod, self.weapon_bonuses.get(weapon, 1.0))
+                weapon_data = self.weapon_bonuses.get(weapon, {'damage': 1.0})
+                weapon_mod = max(weapon_mod, weapon_data['damage'])
             member_strength *= weapon_mod
             
             # Apply health scaling

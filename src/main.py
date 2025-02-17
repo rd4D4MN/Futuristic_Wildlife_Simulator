@@ -4,7 +4,7 @@ import pygame
 import random
 import pandas as pd
 import math
-from typing import List
+from typing import List, Any
 
 # Import modules for map, entities, UI, and utilities
 from map.map_generator import (
@@ -53,6 +53,7 @@ class GameState:
         self.camera_speed = 10
         self.frame_count = 0
         self.running = True
+        self.TILE_SIZE = TILE_SIZE  # Add TILE_SIZE as class attribute
 
         # Initialize pygame and screen
         pygame.init()
@@ -507,30 +508,122 @@ class GameState:
         dy = animal1.y - animal2.y
         return math.sqrt(dx*dx + dy*dy) <= distance
 
+    def handle_input(self) -> bool:
+        """Handle user input."""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return False
+                
+            # Let UI handle events first
+            ui_result = self.ui_manager.handle_event(event)
+            if isinstance(ui_result, Robot):  # If a robot was clicked in team overview
+                # Find the index of the clicked robot
+                if ui_result in self.robots:
+                    self.spectating = True
+                    self.spectated_robot_index = self.robots.index(ui_result)
+                    self.ui_manager.add_notification(
+                        f"Now spectating {self.robots[self.spectated_robot_index].name}",
+                        'info'
+                    )
+                continue
+            elif ui_result:  # Other UI event was handled
+                continue
+                
+            if event.type == pygame.KEYDOWN:
+                self._handle_keydown(event)
+                
+            elif event.type == pygame.MOUSEMOTION:
+                # Update UI hover states
+                self._handle_mouse_motion(event)
+                
+        self._handle_camera_movement()
+        return True
+
+    def _handle_mouse_motion(self, event: pygame.event.Event) -> None:
+        """Handle mouse motion for UI interactions"""
+        # Update tooltip for entities under cursor
+        mouse_x, mouse_y = event.pos
+        world_x = mouse_x + self.camera_x
+        world_y = mouse_y + self.camera_y
+        
+        # Check for entities under cursor
+        for animal in self.animals:
+            if animal.health > 0:
+                dx = world_x - animal.x
+                dy = world_y - animal.y
+                if math.sqrt(dx*dx + dy*dy) < 32:  # Radius for interaction
+                    tooltip_text = self._get_entity_tooltip(animal)
+                    self.ui_manager.active_tooltip = {
+                        'text': tooltip_text,
+                        'entity': animal
+                    }
+                    return
+                    
+        for robot in self.robots:
+            dx = world_x - robot.x
+            dy = world_y - robot.y
+            if math.sqrt(dx*dx + dy*dy) < 32:
+                tooltip_text = self._get_entity_tooltip(robot)
+                self.ui_manager.active_tooltip = {
+                    'text': tooltip_text,
+                    'entity': robot
+                }
+                return
+        
+        self.ui_manager.active_tooltip = None
+
+    def _get_entity_tooltip(self, entity: Any) -> str:
+        """Get tooltip text for an entity"""
+        if hasattr(entity, 'name'):  # Animal
+            tooltip_lines = [
+                f"{entity.name}",
+                f"Health: {int(entity.health)}/{int(entity.max_health)}"
+            ]
+            if entity.team:
+                tooltip_lines.extend([
+                    f"Team: {entity.team.get_leader_name()}",
+                    f"Role: {'Leader' if entity.team.leader == entity else 'Member'}"
+                ])
+            return "\n".join(tooltip_lines)
+        else:  # Robot
+            tooltip_lines = [entity.name]  # Use robot's name property
+            if entity.team:
+                tooltip_lines.extend([
+                    f"Team Size: {len(entity.team.members)}",
+                    f"Formation: {entity.team.formation}"
+                ])
+            tooltip_lines.append(f"State: {entity.state}")
+            return "\n".join(tooltip_lines)
+
     def draw(self) -> None:
-        """Draw the game state."""
+        """Draw the game state with modern UI."""
         self.screen.fill((0, 0, 0))
+        
+        # Draw world and entities
         self._draw_world()
         self._draw_entities()
         self.combat_manager.draw(self.screen, self.camera_x, self.camera_y)
         
-        # Draw evolution stats if debug mode is on
-        if self.debug_mode:
-            self._draw_evolution_stats()
+        # Get environment data with terrain-specific weather
+        environment_data = {
+            'time_of_day': self.environment_system.time_of_day,
+            'weather_conditions': self.environment_system.weather_conditions,  # Now includes all terrain weather
+            'season': self.environment_system.season,
+            'current_terrain': self._get_current_terrain()  # Add current terrain info
+        }
         
-        # Draw spectator info if in spectator mode
-        if self.spectating:
-            self._draw_spectator_info()
-        
+        # Draw UI with all new features
         self.ui_manager.draw(
-            self.screen, 
-            self.animals, 
-            self.robots, 
-            self.teams, 
+            self.screen,
+            self.animals,
+            self.robots,
+            self.teams,
             camera_pos=(self.camera_x, self.camera_y),
-            world_data=self.world_data
+            world_data=self.world_data,
+            environment_data=environment_data
         )
-
+        
+        # Update display
         pygame.display.flip()
 
     def _draw_world(self) -> None:
@@ -559,103 +652,106 @@ class GameState:
         for robot in self.robots:
             robot.draw(self.screen, self.camera_x, self.camera_y)
 
-    def _draw_evolution_stats(self) -> None:
-        """Draw evolution statistics in debug mode."""
-        font = pygame.font.Font(None, 24)
-        y = 10
-        
-        for species in set(animal.name for animal in self.animals):
-            stats = self.evolution_manager.get_species_stats(species)
-            if stats:
-                text = f"{species}: Gen {stats['generations']}, Pop {sum(1 for a in self.animals if a.name == species)}"
-                text_surface = font.render(text, True, (255, 255, 255))
-                self.screen.blit(text_surface, (10, y))
-                y += 25
-                
-                # Show averages
-                avg_text = f"Atk: {stats['avg_attack']:.2f}, Def: {stats['avg_armor']:.2f}, Agi: {stats['avg_agility']:.2f}"
-                avg_surface = font.render(avg_text, True, (200, 200, 200))
-                self.screen.blit(avg_surface, (20, y))
-                y += 25
-
-    def _draw_spectator_info(self) -> None:
-        """Draw spectator information when in spectator mode."""
-        if not self.spectating or self.spectated_robot_index < 0:
-            return
-
-        robot = self.robots[self.spectated_robot_index]
-        font = pygame.font.Font(None, 24)
-        
-        # Draw spectator info box
-        info_surface = pygame.Surface((300, 120))
-        info_surface.set_alpha(200)
-        info_surface.fill((0, 0, 0))
-        
-        # Format robot name consistently with team menu
-        robot_name = f"Robot #{self.spectated_robot_index + 1}"
-        
-        # Get world location based on robot's position
-        world_x = int(robot.x / TILE_SIZE)
-        world_y = int(robot.y / TILE_SIZE)
-        location = self._get_world_location(world_x, world_y)
-        
-        # Robot info text
-        texts = [
-            f"Spectating {robot_name}",
-            f"State: {robot.state}",
-            f"Team Size: {len(robot.team.members) if robot.team else 0}",
-            f"Location: {location}",
-            "Use LEFT/RIGHT to switch robots"
-        ]
-        
-        for i, text in enumerate(texts):
-            text_surface = font.render(text, True, (255, 255, 255))
-            info_surface.blit(text_surface, (10, 10 + i * 22))
-        
-        # Position spectator info at top-left
-        self.screen.blit(info_surface, (10, 10))
-
-    def _get_world_location(self, x: int, y: int) -> str:
-        """Convert world coordinates to a descriptive location based on continents and oceans."""
-        # Convert grid coordinates to percentages of world width/height
-        x_percent = x / WORLD_WIDTH
-        y_percent = y / WORLD_HEIGHT
-
-        # Check if we're in water first
-        terrain = self.world_grid[min(y, len(self.world_grid)-1)][min(x, len(self.world_grid[0])-1)]
-        if terrain == 'aquatic':
-            # Ocean regions
-            if x_percent < 0.3:
-                return "Pacific Ocean"
-            elif x_percent < 0.45:
-                return "Atlantic Ocean"
+    def _handle_keydown(self, event: pygame.event.Event) -> None:
+        """Handle keydown events with improved UI feedback."""
+        if event.key == pygame.K_ESCAPE:
+            self.running = False
+        elif event.key == pygame.K_h:
+            self.ui_manager.toggle_ui_element('health_bars')
+            self.ui_manager.add_notification(
+                "Health bars " + ("shown" if self.ui_manager.show_health_bars else "hidden"),
+                'info'
+            )
+        elif event.key == pygame.K_m:
+            self.ui_manager.toggle_ui_element('minimap')
+            self.ui_manager.add_notification(
+                "Minimap " + ("shown" if self.ui_manager.show_minimap else "hidden"),
+                'info'
+            )
+        elif event.key == pygame.K_t:
+            self.ui_manager.toggle_ui_element('teams')
+            self.ui_manager.add_notification(
+                "Team overview " + ("shown" if self.ui_manager.show_team_overview else "hidden"),
+                'info'
+            )
+        elif event.key == pygame.K_F3:
+            self.debug_mode = not self.debug_mode
+            self.ui_manager.add_notification(
+                "Debug mode " + ("enabled" if self.debug_mode else "disabled"),
+                'info'
+            )
+        elif event.key == pygame.K_TAB:
+            # Toggle spectator mode with notification
+            self.spectating = not self.spectating
+            if self.spectating:
+                self.spectated_robot_index = 0 if self.robots else -1
+                if self.spectated_robot_index >= 0:
+                    self.ui_manager.add_notification(
+                        f"Now spectating {self.robots[self.spectated_robot_index].name}",
+                        'info'
+                    )
             else:
-                return "Indian Ocean"
-        
-        # Continental regions
-        if 0.45 < x_percent < 0.65:
-            if 0.2 < y_percent < 0.45:
-                return "Europe"
-            elif 0.35 < y_percent < 0.8:
-                return "Africa"
-        elif 0.6 < x_percent < 0.85:
-            if 0.2 < y_percent < 0.6:
-                return "Asia"
-            elif 0.5 < y_percent < 0.7:
-                return "Australia"
-        elif 0.15 < x_percent < 0.35:
-            if 0.2 < y_percent < 0.4:
-                return "North America"
-            elif 0.4 < y_percent < 0.8:
-                return "South America"
-        
-        # If not in a specific region, return the nearest ocean
-        if x_percent < 0.3:
-            return "Pacific Ocean"
-        elif x_percent < 0.45:
-            return "Atlantic Ocean"
+                self.ui_manager.add_notification("Exited spectator mode", 'info')
+        elif event.key == pygame.K_LEFT and self.spectating:
+            # Previous robot
+            if self.robots:
+                self.spectated_robot_index = (self.spectated_robot_index - 1) % len(self.robots)
+                self.ui_manager.add_notification(
+                    f"Now spectating {self.robots[self.spectated_robot_index].name}",
+                    'info'
+                )
+        elif event.key == pygame.K_RIGHT and self.spectating:
+            # Next robot
+            if self.robots:
+                self.spectated_robot_index = (self.spectated_robot_index + 1) % len(self.robots)
+                self.ui_manager.add_notification(
+                    f"Now spectating {self.robots[self.spectated_robot_index].name}",
+                    'info'
+                )
+
+    def _handle_camera_movement(self) -> None:
+        """Handle camera movement with smooth transitions."""
+        if self.spectating and 0 <= self.spectated_robot_index < len(self.robots):
+            # Follow the spectated robot with smooth camera
+            robot = self.robots[self.spectated_robot_index]
+            target_x = robot.x - self.screen_width // 2
+            target_y = robot.y - self.screen_height // 2
+            
+            # Smooth camera movement with easing
+            self.camera_x += (target_x - self.camera_x) * 0.1
+            self.camera_y += (target_y - self.camera_y) * 0.1
         else:
-            return "Indian Ocean"
+            # Handle manual camera movement
+            keys = pygame.key.get_pressed()
+            if not self.spectating:
+                move_x = 0
+                move_y = 0
+                
+                if keys[pygame.K_LEFT]:
+                    move_x -= self.camera_speed
+                if keys[pygame.K_RIGHT]:
+                    move_x += self.camera_speed
+                if keys[pygame.K_UP]:
+                    move_y -= self.camera_speed
+                if keys[pygame.K_DOWN]:
+                    move_y += self.camera_speed
+                    
+                # Apply smooth movement
+                if move_x != 0 or move_y != 0:
+                    self.camera_x = max(0, min(self.width - self.screen_width,
+                                             self.camera_x + move_x))
+                    self.camera_y = max(0, min(self.height - self.screen_height,
+                                             self.camera_y + move_y))
+
+    def _get_current_terrain(self) -> str:
+        """Get the terrain type at the center of the viewport."""
+        center_x = int((self.camera_x + self.screen_width/2) // self.TILE_SIZE)
+        center_y = int((self.camera_y + self.screen_height/2) // self.TILE_SIZE)
+        
+        try:
+            return self.world_grid[center_y][center_x]
+        except IndexError:
+            return 'grassland'  # Default terrain
 
     def cleanup(self) -> None:
         """Clean up resources when game ends."""
@@ -680,72 +776,6 @@ class GameState:
             pygame.quit()
         except Exception as e:
             print(f"Error during cleanup: {e}")
-
-    def handle_input(self) -> bool:
-        """Handle user input."""
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                return False
-            if event.type == pygame.KEYDOWN:
-                self._handle_keydown(event)
-        self._handle_camera_movement()
-        return True
-
-    def _handle_keydown(self, event: pygame.event.Event) -> None:
-        """Handle keydown events."""
-        if event.key == pygame.K_ESCAPE:
-            self.running = False  # Set running to False instead of directly quitting
-        elif event.key == pygame.K_h:
-            self.ui_manager.toggle_ui_element('health_bars')
-        elif event.key == pygame.K_m:
-            self.ui_manager.toggle_ui_element('minimap')
-        elif event.key == pygame.K_t:
-            self.ui_manager.toggle_ui_element('teams')
-        elif event.key == pygame.K_F3:
-            self.debug_mode = not self.debug_mode
-        elif event.key == pygame.K_TAB:
-            # Toggle spectator mode
-            self.spectating = not self.spectating
-            if self.spectating:
-                self.spectated_robot_index = 0 if self.robots else -1
-        elif event.key == pygame.K_LEFT and self.spectating:
-            # Previous robot
-            if self.robots:
-                self.spectated_robot_index = (self.spectated_robot_index - 1) % len(self.robots)
-        elif event.key == pygame.K_RIGHT and self.spectating:
-            # Next robot
-            if self.robots:
-                self.spectated_robot_index = (self.spectated_robot_index + 1) % len(self.robots)
-
-    def _handle_camera_movement(self) -> None:
-        """Handle camera movement."""
-        if self.spectating and 0 <= self.spectated_robot_index < len(self.robots):
-            # Follow the spectated robot
-            robot = self.robots[self.spectated_robot_index]
-            target_x = robot.x - self.screen_width // 2
-            target_y = robot.y - self.screen_height // 2
-            
-            # Smooth camera movement
-            self.camera_x = float(self.camera_x + (target_x - self.camera_x) * 0.1)
-            self.camera_y = float(self.camera_y + (target_y - self.camera_y) * 0.1)
-            
-            # Constrain camera to world bounds
-            self.camera_x = max(0, min(self.camera_x, self.width - self.screen_width))
-            self.camera_y = max(0, min(self.camera_y, self.height - self.screen_height))
-        else:
-            # Normal camera movement
-            keys = pygame.key.get_pressed()
-            if not self.spectating:  # Only allow arrow key movement when not spectating
-                if keys[pygame.K_LEFT]:
-                    self.camera_x = max(0, self.camera_x - self.camera_speed)
-                if keys[pygame.K_RIGHT]:
-                    max_x = (WORLD_WIDTH * TILE_SIZE) - self.screen_width
-                    self.camera_x = min(max_x, self.camera_x + self.camera_speed)
-                if keys[pygame.K_UP]:
-                    self.camera_y = max(0, self.camera_y - self.camera_speed)
-                if keys[pygame.K_DOWN]:
-                    max_y = (WORLD_HEIGHT * TILE_SIZE) - self.screen_height
-                    self.camera_y = min(max_y, self.camera_y + self.camera_speed)
 
 
 def main():
