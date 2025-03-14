@@ -14,7 +14,14 @@ class EnvironmentSystem:
             'forest': {'rain_chance': 0.5, 'temp_range': (10, 25)},
             'desert': {'rain_chance': 0.05, 'temp_range': (25, 40)},
             'mountain': {'rain_chance': 0.2, 'temp_range': (-5, 15)},
-            'aquatic': {'rain_chance': 0.4, 'temp_range': (0, 20)}
+            'aquatic': {'rain_chance': 0.4, 'temp_range': (0, 20)},
+            # Add transition terrains
+            'forest_edge': {'rain_chance': 0.4, 'temp_range': (12, 28)},
+            'savanna': {'rain_chance': 0.2, 'temp_range': (20, 35)},
+            'hills': {'rain_chance': 0.25, 'temp_range': (5, 25)},
+            'wooded_hills': {'rain_chance': 0.35, 'temp_range': (5, 20)},
+            'wetland': {'rain_chance': 0.6, 'temp_range': (10, 25)},
+            'beach': {'rain_chance': 0.3, 'temp_range': (15, 35)}
         }
 
         # Environment effects by terrain type
@@ -23,7 +30,14 @@ class EnvironmentSystem:
             'forest': {'movement_speed': 0.8, 'stamina_drain': 1.2, 'visibility': 0.7},
             'desert': {'movement_speed': 0.9, 'stamina_drain': 1.5, 'visibility': 1.2},
             'mountain': {'movement_speed': 0.7, 'stamina_drain': 1.4, 'visibility': 0.9},
-            'aquatic': {'movement_speed': 0.6, 'stamina_drain': 1.3, 'visibility': 0.8}
+            'aquatic': {'movement_speed': 0.6, 'stamina_drain': 1.3, 'visibility': 0.8},
+            # Add transition terrains with blended effects
+            'forest_edge': {'movement_speed': 0.9, 'stamina_drain': 1.1, 'visibility': 0.85},
+            'savanna': {'movement_speed': 0.95, 'stamina_drain': 1.25, 'visibility': 1.1},
+            'hills': {'movement_speed': 0.85, 'stamina_drain': 1.2, 'visibility': 1.0},
+            'wooded_hills': {'movement_speed': 0.75, 'stamina_drain': 1.3, 'visibility': 0.8},
+            'wetland': {'movement_speed': 0.7, 'stamina_drain': 1.2, 'visibility': 0.9},
+            'beach': {'movement_speed': 0.8, 'stamina_drain': 1.3, 'visibility': 1.1}
         }
 
         # Initialize weather for each terrain type

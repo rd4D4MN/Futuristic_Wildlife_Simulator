@@ -146,41 +146,49 @@ class UIManager:
         return 'arial'
 
     def _init_minimap(self) -> None:
-        """Initialize minimap with modern styling"""
-        self.MINIMAP_SCALE = 2
-        self.MINIMAP_WIDTH = 300
-        self.MINIMAP_HEIGHT = 200
-        self.MINIMAP_BORDER = 2
-        self.minimap_surface = None
+        """Initialize minimap configuration with responsive sizing"""
+        # Make minimap size proportional to screen size
+        self.MINIMAP_WIDTH = int(self.screen_width * 0.2)  # 20% of screen width
+        self.MINIMAP_HEIGHT = int(self.screen_height * 0.25)  # 25% of screen height
         self.minimap_rect = pygame.Rect(
             self.screen_width - self.MINIMAP_WIDTH - 20,
             20,
             self.MINIMAP_WIDTH,
             self.MINIMAP_HEIGHT
         )
-        self.minimap_drag_active = False
+        self.minimap_surface = None
+        self.minimap_update_interval = 30  # Update every 30 frames
+        self.minimap_last_update = 0
 
     def _init_battle_log(self) -> None:
-        """Initialize battle log with modern styling"""
-        self.recent_battles = []
-        self.battle_log_surface = None
+        """Initialize battle log configuration with responsive sizing"""
+        # Make battle log size proportional to screen size
+        self.battle_log_width = int(self.screen_width * 0.25)  # 25% of screen width
+        self.battle_log_height = int(self.screen_height * 0.3)  # 30% of screen height
         self.battle_log_rect = pygame.Rect(
-            self.screen_width - 350,
-            self.MINIMAP_HEIGHT + 40,
-            330,
-            200
+            self.screen_width - self.battle_log_width - 20,
+            self.screen_height - self.battle_log_height - 60,
+            self.battle_log_width,
+            self.battle_log_height
         )
+        self.recent_battles = []
+        self.max_battles = 5
+        self.battle_log_surface = None
         self.battle_animations = {}
         self.max_battle_entries = 5
 
     def _init_team_overview(self) -> None:
-        """Initialize team overview with modern styling"""
-        self.team_table_width = 350
-        self.team_row_height = int(25 * self.ui_scale.value)
-        self.team_padding = int(12 * self.ui_scale.value)
-        self.max_visible_teams = 10
-        self.team_scroll_offset = 0
+        """Initialize team overview configuration with responsive sizing"""
+        # Make team panel size proportional to screen size
+        self.team_panel_width = int(self.screen_width * 0.25)  # 25% of screen width
+        self.team_panel_height = int(self.screen_height * 0.4)  # 40% of screen height
+        self.team_panel_rect = pygame.Rect(20, 20, self.team_panel_width, self.team_panel_height)
+        self.team_padding = 15
+        self.team_row_height = 30
         self.team_hover_index = -1
+        self.max_visible_teams = (self.team_panel_height - 80) // self.team_row_height
+        self.team_scroll_offset = 0
+        self.team_scroll_max = 0
 
     def _init_caching(self) -> None:
         """Initialize surface caching for better performance"""
@@ -620,7 +628,7 @@ class UIManager:
         if not active_teams:
             return
 
-        panel_width = self.team_table_width
+        panel_width = self.team_panel_width
         row_height = self.team_row_height
         header_height = 35
         
@@ -859,7 +867,7 @@ class UIManager:
         sorted_teams = sorted(teams, key=lambda t: len(t.members), reverse=True)
 
         # Calculate panel dimensions
-        panel_width = 350
+        panel_width = self.team_panel_width
         panel_height = min(len(sorted_teams), self.max_visible_teams) * self.team_row_height + 80
         panel_rect = pygame.Rect(10, 10, panel_width, panel_height)
         self.team_panel_rect = panel_rect  # Store for click detection

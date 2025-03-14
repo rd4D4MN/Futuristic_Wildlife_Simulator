@@ -12,9 +12,9 @@ from typing import Tuple, Dict, Optional, List
 import pygame
 
 # Constants
-TILE_SIZE = 8
-WORLD_HEIGHT = 800
-WORLD_WIDTH = 1200
+TILE_SIZE = 32
+WORLD_HEIGHT = 400
+WORLD_WIDTH = 600
 
 # Simple tile colors
 tile_mapping = {
@@ -24,7 +24,12 @@ tile_mapping = {
     "aquatic": (0, 105, 148),     # Deeper blue (for ocean)
     "desert": (238, 214, 175),    # Softer sand color
     "polar": (220, 220, 220),     # Lighter gray
-    "wetland": (107, 142, 35)     # Not used in example
+    "wetland": (107, 142, 35),    # Not used in example
+    "forest_edge": (60, 160, 60),    # Lighter green
+    "savanna": (180, 180, 100),      # Light yellow-green
+    "hills": (120, 100, 80),         # Light brown
+    "wooded_hills": (80, 120, 60),   # Dark green-brown
+    "beach": (240, 230, 140)         # Light sand
 }
 
 def load_raster_data(file_path: str) -> Tuple[np.ndarray, rasterio.Affine]:
@@ -164,8 +169,8 @@ def generate_world_grid(
     debug: bool = False
 ) -> Tuple[List[List[str]], np.ndarray]:
     """
-    Create a 2D list of terrain from the 40x60 raster.
-    land_mask: 1=land, 0=water (also 40x60).
+    Create a 2D list of terrain from the raster.
+    land_mask: 1=land, 0=water.
     """
     data = np.array(raster_data).copy()  # shape => (40,60) or (3,40,60)
 
@@ -176,11 +181,12 @@ def generate_world_grid(
         height, width = data.shape
 
     if (height, width) != (WORLD_HEIGHT, WORLD_WIDTH):
-        raise ValueError(f"raster_data shape {data.shape} != (40,60). Did you resample?")
+        raise ValueError(f"raster_data shape {data.shape} != ({WORLD_HEIGHT},{WORLD_WIDTH}). Did you resample?")
 
     world_grid = [[None for _ in range(WORLD_WIDTH)] for _ in range(WORLD_HEIGHT)]
     terrain_counts = {'aquatic': 0, 'mountain': 0, 'desert': 0, 'forest': 0, 'grassland': 0}
     
+    # First pass: determine base terrain types
     for y in range(WORLD_HEIGHT):
         for x in range(WORLD_WIDTH):
             # Get terrain type based on raster data and land mask
@@ -188,11 +194,82 @@ def generate_world_grid(
             world_grid[y][x] = terrain
             terrain_counts[terrain] = terrain_counts.get(terrain, 0) + 1
     
+    # Second pass: add terrain transitions
+    smoothed_grid = apply_terrain_transitions(world_grid)
+    
     # Only print terrain distribution in debug mode
     if debug:
         print("Terrain distribution:", terrain_counts)
     
-    return world_grid, data
+    return smoothed_grid, data
+
+def apply_terrain_transitions(world_grid: List[List[str]]) -> List[List[str]]:
+    """Apply terrain transitions to make the world look more natural."""
+    height = len(world_grid)
+    width = len(world_grid[0])
+    
+    # Create a copy of the grid to store the result
+    result_grid = [row[:] for row in world_grid]
+    
+    # Define transition terrain types
+    transition_terrains = {
+        ('grassland', 'forest'): 'forest_edge',
+        ('forest', 'grassland'): 'forest_edge',
+        ('grassland', 'desert'): 'savanna',
+        ('desert', 'grassland'): 'savanna',
+        ('mountain', 'grassland'): 'hills',
+        ('grassland', 'mountain'): 'hills',
+        ('mountain', 'forest'): 'wooded_hills',
+        ('forest', 'mountain'): 'wooded_hills',
+        ('aquatic', 'grassland'): 'wetland',
+        ('grassland', 'aquatic'): 'wetland',
+        ('aquatic', 'desert'): 'beach',
+        ('desert', 'aquatic'): 'beach',
+    }
+    
+    # Define terrain compatibility for transitions
+    # Higher value means more likely to transition
+    terrain_compatibility = {
+        'grassland': {'forest': 0.7, 'desert': 0.5, 'mountain': 0.3, 'aquatic': 0.4},
+        'forest': {'grassland': 0.7, 'mountain': 0.4, 'aquatic': 0.5, 'desert': 0.1},
+        'desert': {'grassland': 0.5, 'mountain': 0.3, 'aquatic': 0.2, 'forest': 0.1},
+        'mountain': {'grassland': 0.3, 'forest': 0.4, 'desert': 0.3, 'aquatic': 0.1},
+        'aquatic': {'grassland': 0.4, 'forest': 0.5, 'desert': 0.2, 'mountain': 0.1}
+    }
+    
+    # Apply transitions
+    for y in range(height):
+        for x in range(width):
+            current_terrain = world_grid[y][x]
+            
+            # Check neighbors
+            neighbors = []
+            for dy, dx in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                ny, nx = y + dy, x + dx
+                if 0 <= ny < height and 0 <= nx < width:
+                    neighbors.append(world_grid[ny][nx])
+            
+            # Count neighbor terrain types
+            neighbor_counts = {}
+            for neighbor in neighbors:
+                neighbor_counts[neighbor] = neighbor_counts.get(neighbor, 0) + 1
+            
+            # Find most common different neighbor
+            different_neighbors = [t for t in neighbor_counts if t != current_terrain]
+            if different_neighbors:
+                most_common = max(different_neighbors, key=lambda t: neighbor_counts[t])
+                
+                # Check if we should apply a transition
+                if (most_common in terrain_compatibility.get(current_terrain, {}) and 
+                    random.random() < terrain_compatibility[current_terrain][most_common] * 
+                    (neighbor_counts[most_common] / len(neighbors))):
+                    
+                    # Apply transition terrain if defined
+                    transition_key = (current_terrain, most_common)
+                    if transition_key in transition_terrains:
+                        result_grid[y][x] = transition_terrains[transition_key]
+    
+    return result_grid
 
 def get_spawn_points_by_terrain(world_grid: List[List[str]]) -> Dict[str, List[Tuple[int, int]]]:
     """Generate dictionary of spawn points for each terrain type with improved clustering."""

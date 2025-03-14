@@ -33,7 +33,7 @@ class Animal(pygame.sprite.Sprite):
         self.y = 0
         self.dx = 0
         self.dy = 0
-        self.base_speed = float(data.get('Speed_Max', 30))  # Store base speed
+        self.base_speed = float(data.get('Speed_Max', 30)) * (32 / 8)  # Scale speed based on tile size (32px vs original 8px)
         self.speed = self.base_speed  # Current speed (may be modified by terrain)
         self.direction = random.uniform(0, 2 * math.pi)
         
@@ -80,7 +80,7 @@ class Animal(pygame.sprite.Sprite):
         
         # Visual attributes
         self.color = self._parse_color(data.get('Color', 'Brown'))
-        self.size = max(10, min(30, math.sqrt(float(data.get('Weight_Max', 50)))))
+        self.size = max(3, min(15, math.sqrt(float(data.get('Weight_Max', 50))) * 0.5))  # Further reduced size
         self.draw_surface = self._create_draw_surface()
         
         # General attributes
@@ -129,8 +129,8 @@ class Animal(pygame.sprite.Sprite):
             return False
             
         # Convert to grid coordinates
-        grid_x = int(new_x // 8)
-        grid_y = int(new_y // 8)
+        grid_x = int(new_x // 32)  # Updated from 8 to 32
+        grid_y = int(new_y // 32)  # Updated from 8 to 32
         
         # Check world boundaries with a safety margin
         margin = 1  # One tile margin
@@ -221,8 +221,8 @@ class Animal(pygame.sprite.Sprite):
             if math.isnan(self.x) or math.isnan(self.y):
                 return 'grassland'  # Default if coordinates are invalid
                 
-            grid_x = int(self.x // 8)
-            grid_y = int(self.y // 8)
+            grid_x = int(self.x // 32)  # Updated from 8 to 32
+            grid_y = int(self.y // 32)  # Updated from 8 to 32
             
             if 0 <= grid_x < len(world_grid[0]) and 0 <= grid_y < len(world_grid):
                 return world_grid[grid_y][grid_x]
@@ -300,88 +300,65 @@ class Animal(pygame.sprite.Sprite):
         compatibility = self._get_terrain_compatibility(terrain_type)
         return compatibility in ['optimal', 'survivable']
     
-    def _get_terrain_compatibility(self, terrain_type: str) -> str:
-        """Get the compatibility level for a terrain type with stricter rules."""
-        # If we don't have original data, use a default
-        if not hasattr(self, 'original_data') or not self.original_data:
-            return 'optimal' if terrain_type == self.preferred_habitat else 'harmful'
+    def _get_terrain_compatibility(self, terrain: str) -> str:
+        """Determine if a terrain is optimal, survivable, or harmful for this animal."""
+        if not terrain:
+            return 'survivable'  # Default if no terrain
             
-        habitat_str = self.original_data.get('Habitat', '').lower()
+        # Handle transition terrains
+        if terrain in ['forest_edge', 'wooded_hills']:
+            if self.preferred_habitat == 'forest':
+                return 'optimal'
+            elif self.preferred_habitat in ['grassland', 'mountain']:
+                return 'survivable'
+            else:
+                return 'harmful'
+                
+        elif terrain == 'savanna':
+            if self.preferred_habitat in ['grassland', 'desert']:
+                return 'optimal'
+            elif self.preferred_habitat == 'forest':
+                return 'survivable'
+            else:
+                return 'harmful'
+                
+        elif terrain == 'hills':
+            if self.preferred_habitat in ['grassland', 'mountain']:
+                return 'optimal'
+            elif self.preferred_habitat == 'forest':
+                return 'survivable'
+            else:
+                return 'harmful'
+                
+        elif terrain == 'wetland':
+            if self.preferred_habitat in ['aquatic', 'grassland']:
+                return 'optimal'
+            elif self.preferred_habitat == 'forest':
+                return 'survivable'
+            else:
+                return 'harmful'
+                
+        elif terrain == 'beach':
+            if self.preferred_habitat in ['aquatic', 'desert']:
+                return 'optimal'
+            elif self.preferred_habitat == 'grassland':
+                return 'survivable'
+            else:
+                return 'harmful'
         
-        # Direct terrain mappings with more keywords
-        terrain_mappings = {
-            'aquatic': ['ocean', 'water', 'marine', 'coastal', 'river', 'lake', 'sea', 'aquatic'],
-            'forest': ['forest', 'woodland', 'rainforest', 'jungle', 'woods'],
-            'mountain': ['mountain', 'alpine', 'highland', 'hill', 'cliff'],
-            'desert': ['desert', 'arid', 'sand', 'dune', 'dry'],
-            'grassland': ['grassland', 'savanna', 'prairie', 'plain', 'meadow', 'field'],
-            'wetland': ['swamp', 'marsh', 'wetland', 'mangrove', 'bog']
-        }
-        
-        # Find primary terrain type from habitat with name-based detection
-        primary_terrain = 'grassland'  # Default
-        for terrain, keywords in terrain_mappings.items():
-            if any(keyword in habitat_str for keyword in keywords) or any(keyword in self.name.lower() for keyword in keywords):
-                primary_terrain = terrain
-                break
-        
-        # Store the detected habitat
-        self.preferred_habitat = primary_terrain
-        
-        # Define terrain compatibility levels with stricter rules for specialized animals
-        # Aquatic animals should suffer more in non-aquatic environments
-        if primary_terrain == 'aquatic':
-            terrain_compatibility = {
-                'optimal': ['aquatic'],
-                'survivable': ['wetland'],  # Only wetlands are survivable
-                'harmful': ['grassland', 'forest', 'desert', 'mountain']  # Everything else is harmful
-            }
-        else:
-            # Standard compatibility for other animals
-            terrain_compatibility = {
-                'aquatic': {
-                    'optimal': ['aquatic'],
-                    'survivable': ['wetland'],
-                    'harmful': ['grassland', 'forest', 'desert', 'mountain']
-                },
-                'forest': {
-                    'optimal': ['forest'],
-                    'survivable': ['grassland', 'wetland'],
-                    'harmful': ['desert', 'mountain', 'aquatic']
-                },
-                'mountain': {
-                    'optimal': ['mountain'],
-                    'survivable': ['forest', 'grassland'],
-                    'harmful': ['desert', 'aquatic', 'wetland']
-                },
-                'desert': {
-                    'optimal': ['desert'],
-                    'survivable': ['grassland'],
-                    'harmful': ['forest', 'mountain', 'aquatic', 'wetland']
-                },
-                'grassland': {
-                    'optimal': ['grassland'],
-                    'survivable': ['forest', 'desert'],
-                    'harmful': ['mountain', 'aquatic', 'wetland']
-                },
-                'wetland': {
-                    'optimal': ['wetland'],
-                    'survivable': ['aquatic', 'grassland'],
-                    'harmful': ['desert', 'mountain']
-                }
-            }
-        
-        # Get compatibility for current terrain
-        compatibility = terrain_compatibility.get(primary_terrain, {})
-        if terrain_type in compatibility.get('optimal', []):
+        # Handle base terrains
+        elif terrain == self.preferred_habitat:
             return 'optimal'
-        elif terrain_type in compatibility.get('survivable', []):
+        elif (
+            (self.preferred_habitat == 'forest' and terrain in ['grassland', 'wetland']) or
+            (self.preferred_habitat == 'grassland' and terrain in ['forest', 'desert', 'wetland']) or
+            (self.preferred_habitat == 'desert' and terrain in ['grassland']) or
+            (self.preferred_habitat == 'mountain' and terrain in ['grassland', 'forest']) or
+            (self.preferred_habitat == 'aquatic' and terrain in ['wetland'])
+        ):
             return 'survivable'
-        elif terrain_type in compatibility.get('harmful', []):
+        else:
             return 'harmful'
-        
-        # Default to harmful if unknown - stricter default
-        return 'harmful'
 
     def get_optimal_terrains(self) -> List[str]:
         """Get list of optimal terrains for this animal."""
@@ -416,11 +393,80 @@ class Animal(pygame.sprite.Sprite):
         if math.isnan(self.x) or math.isnan(self.y):
             return
         
-        # Simply draw the animal without the red blinking effect
+        # Draw terrain effect aura
+        self._draw_terrain_effect_aura(screen, camera_x, camera_y)
+        
+        # Draw the animal
         screen.blit(self.image, (self.x - camera_x, self.y - camera_y))
             
         if show_health_bars:
             self._draw_health_bar(screen, camera_x, camera_y)
+
+    def _draw_terrain_effect_aura(self, screen: pygame.Surface, camera_x: int, camera_y: int):
+        """Draw an aura around the animal based on terrain effects."""
+        if not hasattr(self, 'terrain_health_effect') or not hasattr(self, 'terrain_speed_effect'):
+            return
+            
+        screen_x = self.x - camera_x + 32  # Center of sprite
+        screen_y = self.y - camera_y + 32
+        aura_size = 40  # Size of the aura
+        
+        # Health effect aura
+        if self.terrain_health_effect > 0:
+            # Healing aura (green)
+            aura = pygame.Surface((aura_size * 2, aura_size * 2), pygame.SRCALPHA)
+            pygame.draw.circle(aura, (0, 255, 0, 50), (aura_size, aura_size), aura_size)
+            screen.blit(aura, (screen_x - aura_size, screen_y - aura_size))
+            
+            # Add healing particles
+            if random.random() < 0.1:
+                angle = random.uniform(0, 2 * math.pi)
+                distance = random.uniform(0, 20)
+                particle_x = screen_x + math.cos(angle) * distance
+                particle_y = screen_y + math.sin(angle) * distance
+                
+                pygame.draw.circle(
+                    screen,
+                    (100, 255, 100),
+                    (int(particle_x), int(particle_y)),
+                    2
+                )
+                
+        elif self.terrain_health_effect < 0:
+            # Harmful aura (red)
+            aura = pygame.Surface((aura_size * 2, aura_size * 2), pygame.SRCALPHA)
+            pygame.draw.circle(aura, (255, 0, 0, 50), (aura_size, aura_size), aura_size)
+            screen.blit(aura, (screen_x - aura_size, screen_y - aura_size))
+            
+            # Add damage particles
+            if random.random() < 0.1:
+                angle = random.uniform(0, 2 * math.pi)
+                distance = random.uniform(0, 20)
+                particle_x = screen_x + math.cos(angle) * distance
+                particle_y = screen_y + math.sin(angle) * distance
+                
+                pygame.draw.circle(
+                    screen,
+                    (255, 100, 100),
+                    (int(particle_x), int(particle_y)),
+                    2
+                )
+        
+        # Speed effect indicator
+        if self.terrain_speed_effect != 1.0:
+            if self.terrain_speed_effect > 1.0:
+                # Speed boost (blue trail)
+                for i in range(3):
+                    offset = (i + 1) * 5
+                    alpha = 150 - (i * 50)
+                    trail = pygame.Surface((40, 40), pygame.SRCALPHA)
+                    pygame.draw.circle(trail, (100, 100, 255, alpha), (20, 20), 20 - i)
+                    screen.blit(trail, (screen_x - 20 - offset, screen_y - 20))
+            else:
+                # Slowed (amber glow)
+                slow_indicator = pygame.Surface((aura_size * 2, aura_size * 2), pygame.SRCALPHA)
+                pygame.draw.circle(slow_indicator, (255, 200, 0, 70), (aura_size, aura_size), aura_size)
+                screen.blit(slow_indicator, (screen_x - aura_size, screen_y - aura_size))
 
     def _draw_health_bar(self, screen: pygame.Surface, camera_x: int, camera_y: int):
         """Draw a health bar above the animal with safety checks."""

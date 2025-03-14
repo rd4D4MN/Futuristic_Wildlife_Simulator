@@ -4,7 +4,7 @@ import pygame
 import random
 import pandas as pd
 import math
-from typing import List, Any
+from typing import List, Any, Dict
 
 # Import modules for map, entities, UI, and utilities
 from map.map_generator import (
@@ -50,7 +50,7 @@ class GameState:
         self.height = WORLD_HEIGHT * TILE_SIZE
         self.camera_x = 0
         self.camera_y = 0
-        self.camera_speed = 10
+        self.camera_speed = int(WORLD_WIDTH * TILE_SIZE / 100)  # Proportional to world size
         self.frame_count = 0
         self.running = True
         self.TILE_SIZE = TILE_SIZE  # Add TILE_SIZE as class attribute
@@ -62,6 +62,10 @@ class GameState:
         self.clock = pygame.time.Clock()
         self.ui_manager = UIManager(screen_width, screen_height)
 
+        # Weather and environment visualization
+        self.particles = []
+        self.effect_overlays = self._create_effect_overlays()
+        
         # Load map and terrain data
         self.resampled_raster, self.new_transform = resample_raster(
             "data/Natural_Earth/NE1_HR_LC/NE1_HR_LC.tif",
@@ -119,6 +123,110 @@ class GameState:
                 for _ in range(WORLD_HEIGHT)
             ]
 
+    def _create_effect_overlays(self) -> Dict[str, pygame.Surface]:
+        """Create semi-transparent overlays for weather and time effects."""
+        overlays = {}
+        
+        # Rain overlay (blue tint)
+        rain_overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        rain_overlay.fill((0, 0, 200, 30))
+        overlays['rain'] = rain_overlay
+        
+        # Snow overlay (light blue tint)
+        snow_overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        snow_overlay.fill((200, 200, 255, 30))
+        overlays['snow'] = snow_overlay
+        
+        # Heat overlay (orange tint)
+        heat_overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        heat_overlay.fill((255, 100, 0, 30))
+        overlays['heat'] = heat_overlay
+        
+        # Wind overlay (gray tint)
+        wind_overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        wind_overlay.fill((200, 200, 200, 20))
+        overlays['wind'] = wind_overlay
+        
+        # Night overlay (dark blue tint)
+        night_overlay = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
+        night_overlay.fill((0, 0, 50, 100))
+        overlays['night'] = night_overlay
+        
+        return overlays
+
+    def _update_weather_particles(self, dt: float) -> None:
+        """Update weather particles based on environment conditions."""
+        # Clear old particles
+        self.particles = [p for p in self.particles if p['lifetime'] > 0]
+        
+        # Get current terrain at center of screen
+        center_x = int((self.camera_x + self.screen_width // 2) // self.TILE_SIZE)
+        center_y = int((self.camera_y + self.screen_height // 2) // self.TILE_SIZE)
+        
+        if 0 <= center_x < WORLD_WIDTH and 0 <= center_y < WORLD_HEIGHT:
+            current_terrain = self.world_grid[center_y][center_x]
+            weather = self.environment_system.weather_conditions.get(current_terrain, {})
+            
+            # Add new particles based on weather
+            # Rain particles
+            if weather.get('precipitation', 0) > 0.3:
+                for _ in range(int(weather.get('precipitation', 0) * 20)):
+                    self.particles.append({
+                        'type': 'rain',
+                        'x': random.randint(0, self.screen_width),
+                        'y': random.randint(-10, 0),
+                        'speed': random.uniform(200, 300),
+                        'lifetime': random.uniform(0.5, 1.0)
+                    })
+            
+            # Snow particles (if cold)
+            if weather.get('temperature', 20) < 5 and weather.get('precipitation', 0) > 0.2:
+                for _ in range(int(weather.get('precipitation', 0) * 15)):
+                    self.particles.append({
+                        'type': 'snow',
+                        'x': random.randint(0, self.screen_width),
+                        'y': random.randint(-10, 0),
+                        'speed': random.uniform(50, 100),
+                        'lifetime': random.uniform(1.0, 2.0)
+                    })
+            
+            # Heat particles (if hot)
+            if weather.get('temperature', 20) > 30:
+                for _ in range(int((weather.get('temperature', 20) - 30) * 2)):
+                    self.particles.append({
+                        'type': 'heat',
+                        'x': random.randint(0, self.screen_width),
+                        'y': random.randint(self.screen_height - 50, self.screen_height),
+                        'speed': random.uniform(-50, -30),
+                        'lifetime': random.uniform(0.5, 1.0)
+                    })
+                    
+            # Wind particles
+            if weather.get('wind', 0) > 15:
+                for _ in range(int(weather.get('wind', 0) / 2)):
+                    self.particles.append({
+                        'type': 'wind',
+                        'x': random.randint(0, self.screen_width),
+                        'y': random.randint(0, self.screen_height),
+                        'speed': random.uniform(100, 200),
+                        'lifetime': random.uniform(0.3, 0.8)
+                    })
+        
+        # Update particle positions
+        for particle in self.particles:
+            if particle['type'] == 'rain':
+                particle['y'] += particle['speed'] * dt
+            elif particle['type'] == 'snow':
+                particle['y'] += particle['speed'] * dt
+                particle['x'] += math.sin(particle['y'] / 30) * 2
+            elif particle['type'] == 'heat':
+                particle['y'] += particle['speed'] * dt
+                particle['x'] += math.sin(particle['y'] / 20) * 3
+            elif particle['type'] == 'wind':
+                particle['x'] += particle['speed'] * dt
+                particle['y'] += math.sin(particle['x'] / 50) * 2
+            
+            particle['lifetime'] -= dt
 
     def _spawn_animals(self, num_animals: int = 100) -> List[Animal]:
         """Spawn animals across the map, prioritizing their preferred habitats."""
@@ -399,8 +507,6 @@ class GameState:
         # Default to grassland if no clear match
         return 'grassland'
 
-
-
     def _spawn_robots(self) -> List[Robot]:
         """Spawn robots in a grid pattern across the world."""
         robots = []
@@ -568,6 +674,9 @@ class GameState:
         self.environment_system.update(dt)
         self.combat_manager.update(dt)
         self.evolution_manager.update(dt)
+
+        # Update weather particles
+        self._update_weather_particles(dt)
 
         # Update robots first to maintain territory control
         for robot in self.robots:
@@ -772,6 +881,7 @@ class GameState:
         
         # Draw world and entities
         self._draw_world()
+        self._draw_weather_effects()
         self._draw_entities()
         self.combat_manager.draw(self.screen, self.camera_x, self.camera_y)
         
@@ -815,6 +925,74 @@ class GameState:
                     TILE_SIZE
                 )
                 pygame.draw.rect(self.screen, color, rect)
+
+    def _draw_weather_effects(self) -> None:
+        """Draw weather effects based on environment conditions."""
+        # Get current terrain at center of screen
+        center_x = int((self.camera_x + self.screen_width // 2) // self.TILE_SIZE)
+        center_y = int((self.camera_y + self.screen_height // 2) // self.TILE_SIZE)
+        
+        if 0 <= center_x < WORLD_WIDTH and 0 <= center_y < WORLD_HEIGHT:
+            current_terrain = self.world_grid[center_y][center_x]
+            weather = self.environment_system.weather_conditions.get(current_terrain, {})
+            
+            # Apply weather overlays
+            if weather.get('precipitation', 0) > 0.3:
+                if weather.get('temperature', 20) < 5:
+                    self.screen.blit(self.effect_overlays['snow'], (0, 0))
+                else:
+                    self.screen.blit(self.effect_overlays['rain'], (0, 0))
+            
+            if weather.get('temperature', 20) > 30:
+                self.screen.blit(self.effect_overlays['heat'], (0, 0))
+            
+            if weather.get('wind', 0) > 15:
+                self.screen.blit(self.effect_overlays['wind'], (0, 0))
+            
+            # Apply time of day overlay
+            if self.environment_system.time_of_day < 6 or self.environment_system.time_of_day > 18:
+                night_overlay = self.effect_overlays['night'].copy()
+                # Adjust darkness based on time
+                if 5 <= self.environment_system.time_of_day < 6 or 18 < self.environment_system.time_of_day <= 19:
+                    # Dawn/dusk - lighter
+                    night_overlay.set_alpha(50)
+                else:
+                    # Night - darker
+                    night_overlay.set_alpha(100)
+                self.screen.blit(night_overlay, (0, 0))
+        
+        # Draw particles
+        for particle in self.particles:
+            if particle['type'] == 'rain':
+                pygame.draw.line(
+                    self.screen,
+                    (100, 100, 255),
+                    (particle['x'], particle['y']),
+                    (particle['x'] - 1, particle['y'] + 10),
+                    2
+                )
+            elif particle['type'] == 'snow':
+                pygame.draw.circle(
+                    self.screen,
+                    (255, 255, 255),
+                    (int(particle['x']), int(particle['y'])),
+                    2
+                )
+            elif particle['type'] == 'heat':
+                pygame.draw.circle(
+                    self.screen,
+                    (255, 200, 100),
+                    (int(particle['x']), int(particle['y'])),
+                    3
+                )
+            elif particle['type'] == 'wind':
+                pygame.draw.line(
+                    self.screen,
+                    (200, 200, 200),
+                    (particle['x'], particle['y']),
+                    (particle['x'] - 15, particle['y']),
+                    1
+                )
 
     def _draw_entities(self) -> None:
         """Draw all entities."""
@@ -951,7 +1129,14 @@ class GameState:
 
 def main():
     pygame.init()
-    game = GameState(1280, 720)
+    
+    # Get the screen info to use full screen dimensions
+    screen_info = pygame.display.Info()
+    screen_width = screen_info.current_w
+    screen_height = screen_info.current_h
+    
+    # Create game with screen dimensions
+    game = GameState(screen_width, screen_height)
     running = True
 
     try:
