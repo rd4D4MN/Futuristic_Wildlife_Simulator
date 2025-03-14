@@ -165,17 +165,14 @@ class UIManager:
         # Make battle log size proportional to screen size
         self.battle_log_width = int(self.screen_width * 0.25)  # 25% of screen width
         self.battle_log_height = int(self.screen_height * 0.3)  # 30% of screen height
-        self.battle_log_rect = pygame.Rect(
-            self.screen_width - self.battle_log_width - 20,
-            self.screen_height - self.battle_log_height - 60,
-            self.battle_log_width,
-            self.battle_log_height
-        )
+        self.battle_log_rect = None
         self.recent_battles = []
         self.max_battles = 5
         self.battle_log_surface = None
         self.battle_animations = {}
         self.max_battle_entries = 5
+        self.battle_log_display_time = float('inf')  # Keep battles visible indefinitely
+        self.battle_log_cached_surface = None  # Cache the battle log surface
 
     def _init_team_overview(self) -> None:
         """Initialize team overview configuration with responsive sizing"""
@@ -535,8 +532,18 @@ class UIManager:
     def _draw_battle_log(self, screen: pygame.Surface) -> None:
         """Draw a modern battle log with animations and effects"""
         if not self.recent_battles:
+            # Set battle_log_rect to None when empty to prevent hover detection
+            self.battle_log_rect = None
             return
             
+        # If we have a cached surface and no new battles, use it
+        if self.battle_log_cached_surface is not None:
+            screen.blit(self.battle_log_cached_surface, (
+                self.screen_width - self.battle_log_cached_surface.get_width() - 20,
+                self.MINIMAP_HEIGHT + 80
+            ))
+            return
+        
         # Calculate panel dimensions and position
         panel_width = 480  # Slightly increased width to better fit content
         panel_height = 200
@@ -547,37 +554,49 @@ class UIManager:
             panel_height
         )
 
-        # Draw panel background
-        self._draw_modern_panel(screen, panel_rect, "Recent Battles")
+        # Store battle log rect for hover detection
+        self.battle_log_rect = panel_rect
+        
+        # Create a new surface for the battle log
+        battle_log_surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+
+        # Draw panel background with transparent black
+        transparent_black = (0, 0, 0, 160)  # Transparent black
+        pygame.draw.rect(battle_log_surface, transparent_black, 
+                       pygame.Rect(0, 0, panel_width, panel_height), 
+                       border_radius=self.corner_radius)
+        pygame.draw.rect(battle_log_surface, self.theme['border'], 
+                       pygame.Rect(0, 0, panel_width, panel_height), 
+                       1, border_radius=self.corner_radius)
 
         # Draw column headers
         headers = ["Attacker", "Defender", "Result", "Att. Cas.", "Def. Cas."]
         header_widths = [120, 120, 80, 70, 70]  # Adjusted widths for better spacing
-        x_offset = panel_rect.x + 10
-        y_offset = panel_rect.y + 40
+        x_offset = 10
+        y_offset = 15  # Reduced from 40 to 15 to account for removed title
 
         for header, width in zip(headers, header_widths):
             header_surf = self.fonts['small'].render(header, True, self.theme['text_secondary'])
-            screen.blit(header_surf, (x_offset, y_offset))
+            battle_log_surface.blit(header_surf, (x_offset, y_offset))
             x_offset += width
 
         # Draw battle entries with animations
-        y_offset = panel_rect.y + 65
+        y_offset = 40  # Reduced from 65 to 40 to account for removed title
         max_visible_battles = 3
         
         for frame, result in list(reversed(self.recent_battles))[:max_visible_battles]:
-            if y_offset + 45 > panel_rect.y + panel_height - 10:
+            if y_offset + 45 > panel_height - 10:
                 break
             
             entry_rect = pygame.Rect(
-                panel_rect.x + 10,
+                10,
                 y_offset,
                 panel_width - 20,
                 40
             )
 
             # Draw entry background
-            pygame.draw.rect(screen, self.theme['highlight'], entry_rect,
+            pygame.draw.rect(battle_log_surface, self.theme['highlight'], entry_rect,
                            border_radius=4)
 
             if result.get('outcome') in ['victory', 'draw']:
@@ -610,10 +629,16 @@ class UIManager:
                                       str(att_casualties), str(def_casualties)], 
                                      header_widths):
                     text_surf = self.fonts['small'].render(text, True, self.theme['text'])
-                    screen.blit(text_surf, (x, y))
+                    battle_log_surface.blit(text_surf, (x, y))
                     x += width
 
             y_offset += 45  # Space between entries
+        
+        # Cache the battle log surface
+        self.battle_log_cached_surface = battle_log_surface
+        
+        # Blit the battle log surface to the screen
+        screen.blit(battle_log_surface, (panel_rect.x, panel_rect.y))
 
     def _draw_team_statistics(self, screen: pygame.Surface, teams: List[Any]) -> None:
         """Draw a simplified team overview."""
@@ -781,7 +806,7 @@ class UIManager:
             return (
                 math.atan2(p[1] - bottom_point[1], p[0] - bottom_point[0]),
                 (p[0] - bottom_point[0]) ** 2 + (p[1] - bottom_point[1]) ** 2
-            )
+        )
         
         # Sort points based on polar angle and distance from bottom_point
         sorted_points = sorted(
@@ -823,31 +848,39 @@ class UIManager:
         if self.minimap_surface is None:
             self.minimap_surface = self._create_minimap_base(world_data)
 
+        # Calculate battle log position to align with
+        battle_log_x = self.screen_width - 480 - 20  # Same as in _draw_battle_log
+        battle_log_center_x = battle_log_x + (480 / 2)  # Center of battle log
+        
+        # Calculate minimap position to align with battle log center
+        minimap_x = battle_log_center_x - (self.MINIMAP_WIDTH / 2)
+
         # Draw minimap panel with border and shadow
         panel_rect = pygame.Rect(
-            self.screen_width - self.MINIMAP_WIDTH - 20,
+            int(minimap_x - 5),  # Adjusted to center the minimap with the battle log
             20,  # Reduced from 60 to 20
             self.MINIMAP_WIDTH + 10,
-            self.MINIMAP_HEIGHT + 40
+            self.MINIMAP_HEIGHT + 10  # Reduced from +40 to +10 to remove title space
         )
+        
+        # Store the minimap rect for hover detection
+        self.minimap_rect = panel_rect
         
         # Draw shadow
         shadow_surface = pygame.Surface((panel_rect.width, panel_rect.height), pygame.SRCALPHA)
         shadow_surface.fill((0, 0, 0, 40))
         screen.blit(shadow_surface, (panel_rect.x + 4, panel_rect.y + 4))
         
-        # Draw panel background
-        self._draw_rounded_rect(screen, panel_rect, self.theme['panel'], self.corner_radius)
-        
-        # Draw title inside the panel at the top
-        title_surf = self.fonts['header'].render("World Map", True, self.theme['text'])
-        title_x = panel_rect.x + (panel_rect.width - title_surf.get_width()) // 2  # Center horizontally
-        title_y = panel_rect.y + 5  # Small padding from top
-        screen.blit(title_surf, (title_x, title_y))
+        # Draw panel background with transparent black
+        transparent_black = (0, 0, 0, 160)  # Transparent black
+        self._draw_rounded_rect(screen, panel_rect, transparent_black, self.corner_radius)
         
         # Create working copy with alpha
         minimap = pygame.Surface((self.MINIMAP_WIDTH, self.MINIMAP_HEIGHT), pygame.SRCALPHA)
         minimap.blit(self.minimap_surface, (0, 0))
+        
+        # Make minimap semi-transparent
+        minimap.set_alpha(200)  # Slightly transparent
 
         # Draw entities and territories
         self._draw_minimap_entities(minimap, entities, world_data, 1)
@@ -855,8 +888,8 @@ class UIManager:
         # Draw viewport rectangle with animation
         self._draw_viewport_rect(minimap, camera_pos, world_data)
         
-        # Draw minimap content below the title
-        screen.blit(minimap, (panel_rect.x + 5, panel_rect.y + 35))
+        # Draw minimap content
+        screen.blit(minimap, (panel_rect.x + 5, panel_rect.y + 5))
 
     def _draw_modern_team_overview(self, screen: pygame.Surface, teams: List[Any]) -> None:
         """Draw a modern team overview with proper alignment"""
@@ -868,15 +901,16 @@ class UIManager:
 
         # Calculate panel dimensions
         panel_width = self.team_panel_width
-        panel_height = min(len(sorted_teams), self.max_visible_teams) * self.team_row_height + 80
+        panel_height = min(len(sorted_teams), self.max_visible_teams) * self.team_row_height + 50  # Reduced from 80 to 50 to remove title space
         panel_rect = pygame.Rect(10, 10, panel_width, panel_height)
         self.team_panel_rect = panel_rect  # Store for click detection
 
-        # Draw panel background
-        self._draw_modern_panel(screen, panel_rect, "Active Teams")
+        # Draw panel background with transparent black
+        transparent_black = (0, 0, 0, 160)  # Transparent black
+        self._draw_rounded_rect(screen, panel_rect, transparent_black, self.corner_radius)
 
         # Column headers with fixed positions and widths
-        header_y = panel_rect.y + 40
+        header_y = panel_rect.y + 15  # Reduced from 40 to 15 to account for removed title
         headers = [
             ("Robot", 10, 120),
             ("Size", 140, 40),
@@ -943,8 +977,8 @@ class UIManager:
                                environment_data: Dict[str, Any]) -> None:
         """Draw modern environment information panel with custom-drawn icons at the top middle of the screen"""
         # Calculate panel dimensions - now at top middle
-        panel_width = 580  # Increased width to accommodate wider parameter sections
-        panel_height = 70
+        panel_width = 680  # Increased width to accommodate wider parameter sections
+        panel_height = 90  # Increased height for date display
         panel_rect = pygame.Rect(
             (self.screen_width - panel_width) // 2,  # Center horizontally
             10,  # Top of screen
@@ -952,30 +986,43 @@ class UIManager:
             panel_height
         )
 
-        # Draw panel background with slight transparency
-        bg_color = (*self.theme['panel'][:3], 200)  # More transparent
-        pygame.draw.rect(screen, bg_color, panel_rect, border_radius=self.corner_radius)
+        # Draw panel background with transparent black
+        transparent_black = (0, 0, 0, 160)  # Transparent black
+        pygame.draw.rect(screen, transparent_black, panel_rect, border_radius=self.corner_radius)
         pygame.draw.rect(screen, self.theme['border'], panel_rect, 1, border_radius=self.corner_radius)
-
+        
         # Extract environment data
-        time = environment_data.get('time_of_day', 0.0)
-        season = environment_data.get('season', 'Unknown')
+        time_of_day = environment_data.get('time_of_day', 0)
+        season = environment_data.get('season', 'Spring')
         current_terrain = environment_data.get('current_terrain', 'grassland')
         weather_conditions = environment_data.get('weather_conditions', {})
         
+        # Get time data if available in the new format
+        time_data = environment_data.get('time_data', {})
+        formatted_time = time_data.get('formatted_time', self._format_time(time_of_day))
+        formatted_date = time_data.get('formatted_date', '')
+        
         # Get weather for current terrain
         terrain_weather = weather_conditions.get(current_terrain, {
-            'precipitation': 0,
             'temperature': 20,
+            'precipitation': 0,
             'wind': 0
         })
-
-        # Create icon-based display with fixed spacing
+        
+        # Calculate parameter dimensions
         icon_size = 24
-        param_width = 95  # Increased width for each parameter section to provide more space
+        param_width = panel_width // 6  # 6 parameters
+        
+        # Position parameters with more space
         start_x = panel_rect.x + 10
-        icon_y = panel_rect.y + (panel_height - icon_size) // 2 + 5
+        icon_y = panel_rect.y + (panel_height - icon_size) // 2 - 5  # Moved up to make room for date
         label_y = panel_rect.y + 6  # Moved up further to create more space
+        
+        # Draw date at the top
+        if formatted_date:
+            date_surf = self.fonts['normal'].render(formatted_date, True, self.theme['text_secondary'])
+            date_x = panel_rect.x + (panel_width // 2) - (date_surf.get_width() // 2)
+            screen.blit(date_surf, (date_x, panel_rect.y + panel_height - 25))
 
         # Function to draw a parameter with custom icon, label and value
         def draw_param(x, y, param_type, label, value, color=self.theme['text']):
@@ -1018,7 +1065,7 @@ class UIManager:
 
         # Draw each parameter with fixed width
         params = [
-            ("time", "TIME", f"{time:.1f}"),
+            ("time", "TIME", formatted_time),
             ("season", "SEASON", season),
             ("terrain", "TERRAIN", current_terrain.title()),
             ("temp", "TEMP", f"{terrain_weather['temperature']:.1f}°C", self._get_temp_color(terrain_weather['temperature'])),
@@ -1045,18 +1092,25 @@ class UIManager:
             center = size // 2
             radius = size // 2 - 2
             
-            # Outer circle
-            pygame.draw.circle(icon_surf, self.theme['text'], (center, center), radius, 2)
+            # Draw clock face
+            pygame.draw.circle(icon_surf, self.theme['text'], (center, center), radius, 1)
+            
+            # Draw hour and minute hands based on time of day
+            # This creates a more realistic clock visualization
+            hour_angle = math.pi/2 - 2*math.pi * (self.current_time_of_day % 12) / 12
+            minute_angle = math.pi/2 - 2*math.pi * ((self.current_time_of_day % 1) * 60) / 60
             
             # Hour hand (shorter)
-            pygame.draw.line(icon_surf, self.theme['text'], 
-                           (center, center), 
-                           (center + radius//2, center), 2)
+            hour_length = radius * 0.5
+            hour_x = center + hour_length * math.cos(hour_angle)
+            hour_y = center - hour_length * math.sin(hour_angle)
+            pygame.draw.line(icon_surf, self.theme['text'], (center, center), (hour_x, hour_y), 2)
             
             # Minute hand (longer)
-            pygame.draw.line(icon_surf, self.theme['text'], 
-                           (center, center), 
-                           (center, center - radius*2//3), 2)
+            minute_length = radius * 0.8
+            minute_x = center + minute_length * math.cos(minute_angle)
+            minute_y = center - minute_length * math.sin(minute_angle)
+            pygame.draw.line(icon_surf, self.theme['text'], (center, center), (minute_x, minute_y), 1)
             
             # Center dot
             pygame.draw.circle(icon_surf, self.theme['text'], (center, center), 2)
@@ -1292,24 +1346,26 @@ class UIManager:
             panel_rect = self.team_panel_rect
             if panel_rect.collidepoint(mouse_pos):
                 # Calculate which team row is being hovered
-                relative_y = mouse_pos[1] - panel_rect.y - 75  # Account for header
+                header_y = panel_rect.y + 15  # Same as in _draw_modern_team_overview
+                rows_start_y = header_y + 25  # Same as in _draw_modern_team_overview
+                relative_y = mouse_pos[1] - rows_start_y
                 if relative_y >= 0:
                     hovered_index = relative_y // self.team_row_height
                     if 0 <= hovered_index < self.max_visible_teams:
                         self.team_hover_index = hovered_index
         
         # Check minimap hover
-        if self.show_minimap and self.minimap_rect.collidepoint(mouse_pos):
+        if self.show_minimap and hasattr(self, 'minimap_rect') and self.minimap_rect and self.minimap_rect.collidepoint(mouse_pos):
             # Add minimap hover effect if needed
-            pass
+            pass  # No hover effect implemented yet
         
         # Check battle log hover
-        if self.show_battle_log and self.battle_log_rect.collidepoint(mouse_pos):
+        if self.show_battle_log and hasattr(self, 'battle_log_rect') and self.battle_log_rect and self.battle_log_rect.collidepoint(mouse_pos):
             # Add battle log hover effect if needed
-            pass
+            pass  # No hover effect implemented yet
         
         # Update cursor based on hover states
-        if self.team_hover_index >= 0 or self.minimap_rect.collidepoint(mouse_pos):
+        if self.team_hover_index >= 0 or (hasattr(self, 'minimap_rect') and self.minimap_rect and self.minimap_rect.collidepoint(mouse_pos)):
             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
         else:
             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
@@ -1409,5 +1465,22 @@ class UIManager:
             key_surf = self.fonts['normal'].render(text, True, self.theme['text_secondary'])
             x -= key_surf.get_width() + 15
             screen.blit(key_surf, (x, y + (bar_height - key_surf.get_height()) // 2))
+
+    def _format_time(self, time_of_day: float) -> str:
+        """Format time of day as HH:MM."""
+        hours = int(time_of_day)
+        minutes = int((time_of_day % 1) * 60)
+        return f"{hours:02d}:{minutes:02d}"
+
+    def add_battle(self, frame: int, battle_result: Dict) -> None:
+        """Add a battle to the recent battles list and invalidate the battle log cache."""
+        self.recent_battles.append((frame, battle_result))
+        
+        # Limit the number of recent battles
+        if len(self.recent_battles) > self.max_battles:
+            self.recent_battles = self.recent_battles[-self.max_battles:]
+        
+        # Invalidate the battle log cache
+        self.battle_log_cached_surface = None
 
 

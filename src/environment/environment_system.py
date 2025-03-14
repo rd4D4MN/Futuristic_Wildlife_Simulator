@@ -1,12 +1,23 @@
 from typing import Dict, List, Any
 import random
+import math
 
 class EnvironmentSystem:
     def __init__(self, world_grid: List[List[str]]):
         self.world_grid = world_grid
-        self.time_of_day = 0.0  # 0.0 to 24.0
+        
+        # Time system with calendar
+        self.time_of_day = 8.0  # Start at 8:00 AM (0.0 to 24.0)
+        self.day = 1
+        self.month = 3  # Start in March (1-12)
+        self.year = 1
+        self.time_scale = 0.05  # 0.05 means 1 real second = 0.05 game hours (20x slower than before)
+        self.days_per_month = 30
+        self.months_per_year = 12
+        
+        # Weather and seasons
         self.weather_conditions = {}  # Updated periodically
-        self.season = "Spring"  # Initial season
+        self.season = self._get_season_from_month(self.month)  # Initial season based on month
         
         # Regional weather patterns
         self.terrain_weather_patterns = {
@@ -40,30 +51,111 @@ class EnvironmentSystem:
             'beach': {'movement_speed': 0.8, 'stamina_drain': 1.3, 'visibility': 1.1}
         }
 
+        # Month names for display
+        self.month_names = [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ]
+
         # Initialize weather for each terrain type
         self._initialize_weather()
+
+    def _get_season_from_month(self, month: int) -> str:
+        """Determine season based on month (Northern Hemisphere)."""
+        if 3 <= month <= 5:  # March to May
+            return "Spring"
+        elif 6 <= month <= 8:  # June to August
+            return "Summer"
+        elif 9 <= month <= 11:  # September to November
+            return "Autumn"
+        else:  # December, January, February
+            return "Winter"
 
     def _initialize_weather(self) -> None:
         """Initialize weather conditions based on terrain-specific patterns."""
         for terrain, patterns in self.terrain_weather_patterns.items():
+            # Apply seasonal adjustments to initial weather
+            season_temp_modifier = self._get_season_temperature_modifier()
+            
+            base_temp = random.uniform(*patterns['temp_range'])
+            adjusted_temp = base_temp + season_temp_modifier
+            
             self.weather_conditions[terrain] = {
                 'precipitation': random.uniform(0, patterns['rain_chance']),
-                'temperature': random.uniform(*patterns['temp_range']),
+                'temperature': adjusted_temp,
                 'wind': random.uniform(0, 20)  # Default wind speed range
             }
 
+    def _get_season_temperature_modifier(self) -> float:
+        """Get temperature modifier based on current season."""
+        return {
+            'Summer': 5.0,
+            'Winter': -5.0,
+            'Spring': 0.0,
+            'Autumn': 0.0
+        }.get(self.season, 0.0)
+
     def update(self, dt: float) -> None:
         """Update environment state, including time of day, weather, and season."""
-        # Update time of day (complete cycle every 24 real seconds)
-        self.time_of_day = (self.time_of_day + dt) % 24.0
-
+        # Update time of day with configurable time scale
+        old_time = self.time_of_day
+        self.time_of_day = (self.time_of_day + dt * self.time_scale) % 24.0
+        
+        # Check if a day has passed
+        if old_time > self.time_of_day:  # We've wrapped around to a new day
+            self._advance_day()
+        
         # Update weather more frequently with more noticeable changes
-        if random.random() < 0.1:  # 10% chance each update
+        if random.random() < 0.1 * dt:  # Scale chance with dt
             self._update_weather()
+
+    def _advance_day(self) -> None:
+        """Advance to the next day and update calendar."""
+        self.day += 1
+        
+        # Check if month has changed
+        if self.day > self.days_per_month:
+            self.day = 1
+            self.month += 1
             
-        # Update season based on time
-        if self.time_of_day < 0.1:  # Near midnight
-            self._update_season()
+            # Check if year has changed
+            if self.month > self.months_per_year:
+                self.month = 1
+                self.year += 1
+            
+            # Update season when month changes
+            new_season = self._get_season_from_month(self.month)
+            if new_season != self.season:
+                self.season = new_season
+                # Apply seasonal changes to weather
+                self._apply_seasonal_weather_changes()
+
+    def _apply_seasonal_weather_changes(self) -> None:
+        """Apply seasonal changes to weather patterns."""
+        season_temp_modifier = self._get_season_temperature_modifier()
+        
+        for terrain, weather in self.weather_conditions.items():
+            patterns = self.terrain_weather_patterns[terrain]
+            
+            # Adjust base temperature for season
+            base_temp = (patterns['temp_range'][0] + patterns['temp_range'][1]) / 2
+            weather['temperature'] = base_temp + season_temp_modifier + random.uniform(-3.0, 3.0)
+            
+            # Adjust precipitation based on season
+            if self.season == "Spring":
+                weather['precipitation'] = min(1.0, patterns['rain_chance'] * 1.3)  # More rain in spring
+            elif self.season == "Summer":
+                if terrain in ['desert', 'savanna']:
+                    weather['precipitation'] = patterns['rain_chance'] * 0.5  # Drier in summer for hot areas
+                else:
+                    weather['precipitation'] = patterns['rain_chance'] * 0.8
+            elif self.season == "Autumn":
+                weather['precipitation'] = patterns['rain_chance'] * 1.1  # Slightly more rain
+            elif self.season == "Winter":
+                if terrain in ['mountain', 'hills', 'wooded_hills']:
+                    weather['precipitation'] = min(1.0, patterns['rain_chance'] * 1.2)  # More snow in mountains
+                else:
+                    weather['precipitation'] = patterns['rain_chance'] * 0.9
 
     def _update_weather(self) -> None:
         """Update weather conditions with more dramatic changes."""
@@ -76,12 +168,7 @@ class EnvironmentSystem:
             wind_delta = random.uniform(-3.0, 3.0)  # Increased from 1.0
             
             # Calculate new values with seasonal modifications
-            season_temp_modifier = {
-                'Summer': 5.0,
-                'Winter': -5.0,
-                'Spring': 0.0,
-                'Autumn': 0.0
-            }.get(self.season, 0.0)
+            season_temp_modifier = self._get_season_temperature_modifier()
             
             # Time of day temperature modifications
             time_temp_modifier = -5.0 if 0 <= self.time_of_day <= 6 else \
@@ -92,7 +179,7 @@ class EnvironmentSystem:
                 'temperature': max(patterns['temp_range'][0],
                                  min(patterns['temp_range'][1],
                                      current_weather['temperature'] + temp_delta + 
-                                     season_temp_modifier + time_temp_modifier)),
+                                     time_temp_modifier)),
                 'wind': max(0, min(40, current_weather['wind'] + wind_delta))
             }
             
@@ -108,13 +195,6 @@ class EnvironmentSystem:
                     new_weather['wind'] = min(40, new_weather['wind'] + random.uniform(5.0, 10.0))  # Wind gust
             
             self.weather_conditions[terrain] = new_weather
-
-    def _update_season(self) -> None:
-        """Cycle through seasons and apply changes."""
-        if self.time_of_day == 0:  # Assume season changes occur at midnight
-            seasons = ["Spring", "Summer", "Autumn", "Winter"]
-            current_index = seasons.index(self.season)
-            self.season = seasons[(current_index + 1) % len(seasons)]
 
     def get_environment_effects(self, tile_x: int, tile_y: int) -> Dict[str, float]:
         """Get current environmental effects for a specific tile with more impactful modifiers."""
@@ -164,3 +244,32 @@ class EnvironmentSystem:
             modified_effects['stamina_drain'] *= 1.2
 
         return modified_effects
+        
+    def get_formatted_time(self) -> str:
+        """Return a formatted time string (HH:MM)."""
+        hours = int(self.time_of_day)
+        minutes = int((self.time_of_day % 1) * 60)
+        return f"{hours:02d}:{minutes:02d}"
+    
+    def get_formatted_date(self) -> str:
+        """Return a formatted date string."""
+        month_name = self.month_names[self.month - 1]
+        return f"{month_name} {self.day}, Year {self.year}"
+    
+    def get_time_data(self) -> Dict[str, Any]:
+        """Get complete time and calendar data."""
+        return {
+            'time_of_day': self.time_of_day,
+            'formatted_time': self.get_formatted_time(),
+            'day': self.day,
+            'month': self.month,
+            'month_name': self.month_names[self.month - 1],
+            'year': self.year,
+            'formatted_date': self.get_formatted_date(),
+            'season': self.season,
+            'time_scale': self.time_scale
+        }
+    
+    def set_time_scale(self, scale: float) -> None:
+        """Set the time scale factor (how fast time passes)."""
+        self.time_scale = max(0.001, min(1.0, scale))  # Clamp between 0.001 and 1.0

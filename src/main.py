@@ -167,65 +167,124 @@ class GameState:
             current_terrain = self.world_grid[center_y][center_x]
             weather = self.environment_system.weather_conditions.get(current_terrain, {})
             
-            # Add new particles based on weather
-            # Rain particles
-            if weather.get('precipitation', 0) > 0.3:
-                for _ in range(int(weather.get('precipitation', 0) * 20)):
-                    self.particles.append({
-                        'type': 'rain',
-                        'x': random.randint(0, self.screen_width),
-                        'y': random.randint(-10, 0),
-                        'speed': random.uniform(200, 300),
-                        'lifetime': random.uniform(0.5, 1.0)
-                    })
+            # Get time and season data
+            hour = self.environment_system.time_of_day
+            season = self.environment_system.season
             
-            # Snow particles (if cold)
-            if weather.get('temperature', 20) < 5 and weather.get('precipitation', 0) > 0.2:
-                for _ in range(int(weather.get('precipitation', 0) * 15)):
-                    self.particles.append({
-                        'type': 'snow',
-                        'x': random.randint(0, self.screen_width),
-                        'y': random.randint(-10, 0),
-                        'speed': random.uniform(50, 100),
-                        'lifetime': random.uniform(1.0, 2.0)
-                    })
+            # Calculate particle spawn rates based on weather, time, and season
+            rain_rate = 0
+            snow_rate = 0
+            heat_rate = 0
+            wind_rate = 0
             
-            # Heat particles (if hot)
-            if weather.get('temperature', 20) > 30:
-                for _ in range(int((weather.get('temperature', 20) - 30) * 2)):
-                    self.particles.append({
-                        'type': 'heat',
-                        'x': random.randint(0, self.screen_width),
-                        'y': random.randint(self.screen_height - 50, self.screen_height),
-                        'speed': random.uniform(-50, -30),
-                        'lifetime': random.uniform(0.5, 1.0)
-                    })
+            # Base rates from weather conditions
+            precipitation = weather.get('precipitation', 0)
+            temperature = weather.get('temperature', 20)
+            wind_speed = weather.get('wind', 0)
+            
+            # Adjust for time of day
+            is_daytime = 6 <= hour <= 18
+            
+            # Precipitation particles (rain or snow)
+            if precipitation > 0.3:
+                if temperature < 5:  # Snow
+                    # Snow is more visible during day, but still present at night
+                    snow_base_rate = int(precipitation * 20)
+                    snow_rate = snow_base_rate if is_daytime else snow_base_rate // 2
                     
+                    # More snow in winter
+                    if season == 'Winter':
+                        snow_rate = int(snow_rate * 1.5)
+                else:  # Rain
+                    # Rain is more visible at night due to contrast
+                    rain_base_rate = int(precipitation * 25)
+                    rain_rate = rain_base_rate
+                    
+                    # More rain in spring
+                    if season == 'Spring':
+                        rain_rate = int(rain_rate * 1.3)
+            
+            # Heat particles (more during day, especially in summer)
+            if temperature > 30:
+                heat_base_rate = int((temperature - 30) * 2)
+                heat_rate = heat_base_rate if is_daytime else heat_base_rate // 3
+                
+                # More heat waves in summer
+                if season == 'Summer':
+                    heat_rate = int(heat_rate * 1.5)
+            
             # Wind particles
-            if weather.get('wind', 0) > 15:
-                for _ in range(int(weather.get('wind', 0) / 2)):
-                    self.particles.append({
-                        'type': 'wind',
-                        'x': random.randint(0, self.screen_width),
-                        'y': random.randint(0, self.screen_height),
-                        'speed': random.uniform(100, 200),
-                        'lifetime': random.uniform(0.3, 0.8)
-                    })
+            if wind_speed > 15:
+                wind_base_rate = int(wind_speed / 2)
+                wind_rate = wind_base_rate
+                
+                # More visible wind in autumn
+                if season == 'Autumn':
+                    wind_rate = int(wind_rate * 1.3)
+            
+            # Add new particles based on calculated rates
+            # Rain particles
+            for _ in range(rain_rate):
+                self.particles.append({
+                    'type': 'rain',
+                    'x': random.randint(0, self.screen_width),
+                    'y': random.randint(-10, 0),
+                    'speed': random.uniform(200, 300),
+                    'lifetime': random.uniform(0.5, 1.0)
+                })
+            
+            # Snow particles
+            for _ in range(snow_rate):
+                self.particles.append({
+                    'type': 'snow',
+                    'x': random.randint(0, self.screen_width),
+                    'y': random.randint(-10, 0),
+                    'speed': random.uniform(50, 100),
+                    'lifetime': random.uniform(1.0, 2.0)
+                })
+            
+            # Heat particles
+            for _ in range(heat_rate):
+                self.particles.append({
+                    'type': 'heat',
+                    'x': random.randint(0, self.screen_width),
+                    'y': random.randint(self.screen_height - 50, self.screen_height),
+                    'speed': random.uniform(-50, -30),
+                    'lifetime': random.uniform(0.5, 1.0)
+                })
+            
+            # Wind particles
+            for _ in range(wind_rate):
+                self.particles.append({
+                    'type': 'wind',
+                    'x': random.randint(0, self.screen_width),
+                    'y': random.randint(0, self.screen_height),
+                    'speed': random.uniform(100, 200),
+                    'lifetime': random.uniform(0.3, 0.8)
+                })
         
-        # Update particle positions
+        # Update particle positions with more realistic physics
         for particle in self.particles:
             if particle['type'] == 'rain':
+                # Rain falls straight down, slightly affected by wind
+                wind_effect = weather.get('wind', 0) * 0.1
                 particle['y'] += particle['speed'] * dt
+                particle['x'] -= wind_effect * dt
             elif particle['type'] == 'snow':
+                # Snow falls more slowly and drifts with sine wave pattern
+                wind_effect = weather.get('wind', 0) * 0.2
                 particle['y'] += particle['speed'] * dt
-                particle['x'] += math.sin(particle['y'] / 30) * 2
+                particle['x'] += math.sin(particle['y'] / 30) * 2 - wind_effect * dt
             elif particle['type'] == 'heat':
+                # Heat rises with wavering motion
                 particle['y'] += particle['speed'] * dt
                 particle['x'] += math.sin(particle['y'] / 20) * 3
             elif particle['type'] == 'wind':
+                # Wind moves horizontally with slight vertical variation
                 particle['x'] += particle['speed'] * dt
                 particle['y'] += math.sin(particle['x'] / 50) * 2
             
+            # Reduce lifetime
             particle['lifetime'] -= dt
 
     def _spawn_animals(self, num_animals: int = 100) -> List[Animal]:
@@ -661,9 +720,9 @@ class GameState:
                             battle_result['result']['context'] = 'territory_conflict'
                         
                         self.event_manager.add_event('battle', battle_result)
-                        self.ui_manager.recent_battles.append(
-                            (self.frame_count, battle_result['result'])
-                        )
+                        
+                        # Use the new add_battle method instead of directly appending
+                        self.ui_manager.add_battle(self.frame_count, battle_result['result'])
                         
                         winner = team1 if battle_result['result'].get('winner') == team1.get_leader_name() else team2
                         winner.experience += 50 + (25 if territory_conflict else 0)  # Extra XP for territory defense
@@ -776,10 +835,6 @@ class GameState:
                 if ui_result in self.robots:
                     self.spectating = True
                     self.spectated_robot_index = self.robots.index(ui_result)
-                    self.ui_manager.add_notification(
-                        f"Now spectating {self.robots[self.spectated_robot_index].name}",
-                        'info'
-                    )
                 continue
             elif ui_result:  # Other UI event was handled
                 continue
@@ -788,7 +843,7 @@ class GameState:
                 self._handle_keydown(event)
                 
             elif event.type == pygame.MOUSEMOTION:
-                # Update UI hover states
+                # Update tooltip for entities under cursor
                 self._handle_mouse_motion(event)
                 
         self._handle_camera_movement()
@@ -890,8 +945,12 @@ class GameState:
             'time_of_day': self.environment_system.time_of_day,
             'weather_conditions': self.environment_system.weather_conditions,  # Now includes all terrain weather
             'season': self.environment_system.season,
-            'current_terrain': self._get_current_terrain()  # Add current terrain info
+            'current_terrain': self._get_current_terrain(),  # Add current terrain info
+            'time_data': self.environment_system.get_time_data()  # Add new time data
         }
+        
+        # Store current time for UI clock animation
+        self.ui_manager.current_time_of_day = self.environment_system.time_of_day
         
         # Draw UI with all new features
         self.ui_manager.draw(
@@ -936,61 +995,124 @@ class GameState:
             current_terrain = self.world_grid[center_y][center_x]
             weather = self.environment_system.weather_conditions.get(current_terrain, {})
             
+            # Get time of day for more realistic lighting
+            hour = self.environment_system.time_of_day
+            season = self.environment_system.season
+            
             # Apply weather overlays
             if weather.get('precipitation', 0) > 0.3:
                 if weather.get('temperature', 20) < 5:
-                    self.screen.blit(self.effect_overlays['snow'], (0, 0))
+                    # Snow effect - more intense in winter
+                    snow_overlay = self.effect_overlays['snow'].copy()
+                    if season == 'Winter':
+                        snow_overlay.set_alpha(60)  # More intense in winter
+                    else:
+                        snow_overlay.set_alpha(40)
+                    self.screen.blit(snow_overlay, (0, 0))
                 else:
-                    self.screen.blit(self.effect_overlays['rain'], (0, 0))
+                    # Rain effect - varies by intensity
+                    rain_overlay = self.effect_overlays['rain'].copy()
+                    rain_intensity = min(80, int(weather.get('precipitation', 0) * 100))
+                    rain_overlay.set_alpha(rain_intensity)
+                    self.screen.blit(rain_overlay, (0, 0))
             
+            # Heat effect - more intense in summer
             if weather.get('temperature', 20) > 30:
-                self.screen.blit(self.effect_overlays['heat'], (0, 0))
+                heat_overlay = self.effect_overlays['heat'].copy()
+                heat_intensity = min(60, int((weather.get('temperature', 20) - 30) * 10))
+                if season == 'Summer':
+                    heat_intensity += 10  # More intense in summer
+                heat_overlay.set_alpha(heat_intensity)
+                self.screen.blit(heat_overlay, (0, 0))
             
+            # Wind effect - varies by intensity
             if weather.get('wind', 0) > 15:
-                self.screen.blit(self.effect_overlays['wind'], (0, 0))
+                wind_overlay = self.effect_overlays['wind'].copy()
+                wind_intensity = min(50, int(weather.get('wind', 0) * 2))
+                wind_overlay.set_alpha(wind_intensity)
+                self.screen.blit(wind_overlay, (0, 0))
             
-            # Apply time of day overlay
-            if self.environment_system.time_of_day < 6 or self.environment_system.time_of_day > 18:
+            # Apply time of day overlay with more realistic transitions
+            # Define day phases with realistic timing
+            dawn_start = 5.0
+            dawn_end = 7.0
+            dusk_start = 18.0
+            dusk_end = 20.0
+            
+            # Adjust for seasonal variations
+            if season == 'Summer':
+                dawn_start -= 1.0  # Earlier sunrise
+                dusk_end += 1.0    # Later sunset
+            elif season == 'Winter':
+                dawn_start += 1.0  # Later sunrise
+                dusk_end -= 1.0    # Earlier sunset
+            
+            # Night time (full darkness)
+            if hour < dawn_start or hour > dusk_end:
                 night_overlay = self.effect_overlays['night'].copy()
-                # Adjust darkness based on time
-                if 5 <= self.environment_system.time_of_day < 6 or 18 < self.environment_system.time_of_day <= 19:
-                    # Dawn/dusk - lighter
-                    night_overlay.set_alpha(50)
-                else:
-                    # Night - darker
-                    night_overlay.set_alpha(100)
+                night_overlay.set_alpha(120)  # Darker nights
+                self.screen.blit(night_overlay, (0, 0))
+            
+            # Dawn transition (gradually getting lighter)
+            elif dawn_start <= hour < dawn_end:
+                night_overlay = self.effect_overlays['night'].copy()
+                # Calculate alpha based on position in dawn transition
+                progress = (hour - dawn_start) / (dawn_end - dawn_start)
+                alpha = int(120 * (1 - progress))
+                night_overlay.set_alpha(alpha)
+                self.screen.blit(night_overlay, (0, 0))
+            
+            # Dusk transition (gradually getting darker)
+            elif dusk_start <= hour < dusk_end:
+                night_overlay = self.effect_overlays['night'].copy()
+                # Calculate alpha based on position in dusk transition
+                progress = (hour - dusk_start) / (dusk_end - dusk_start)
+                alpha = int(120 * progress)
+                night_overlay.set_alpha(alpha)
                 self.screen.blit(night_overlay, (0, 0))
         
-        # Draw particles
+        # Draw particles with improved effects
         for particle in self.particles:
             if particle['type'] == 'rain':
+                # Rain drops - longer when heavier precipitation
+                rain_length = 10 + int(weather.get('precipitation', 0) * 10)
                 pygame.draw.line(
                     self.screen,
                     (100, 100, 255),
                     (particle['x'], particle['y']),
-                    (particle['x'] - 1, particle['y'] + 10),
+                    (particle['x'] - 1, particle['y'] + rain_length),
                     2
                 )
             elif particle['type'] == 'snow':
+                # Snow flakes - larger in winter
+                snow_size = 2
+                if self.environment_system.season == 'Winter':
+                    snow_size = 3
                 pygame.draw.circle(
                     self.screen,
                     (255, 255, 255),
                     (int(particle['x']), int(particle['y'])),
-                    2
+                    snow_size
                 )
             elif particle['type'] == 'heat':
+                # Heat waves - more intense in summer
+                heat_size = 3
+                if self.environment_system.season == 'Summer':
+                    heat_size = 4
                 pygame.draw.circle(
                     self.screen,
                     (255, 200, 100),
                     (int(particle['x']), int(particle['y'])),
-                    3
+                    heat_size
                 )
             elif particle['type'] == 'wind':
+                # Wind streaks - longer with stronger wind
+                wind_length = 15 + int(weather.get('wind', 0) / 2)
                 pygame.draw.line(
                     self.screen,
                     (200, 200, 200),
                     (particle['x'], particle['y']),
-                    (particle['x'] - 15, particle['y']),
+                    (particle['x'] - wind_length, particle['y']),
                     1
                 )
 
@@ -1034,29 +1156,42 @@ class GameState:
             self.spectating = not self.spectating
             if self.spectating:
                 self.spectated_robot_index = 0 if self.robots else -1
-                if self.spectated_robot_index >= 0:
-                    self.ui_manager.add_notification(
-                        f"Now spectating {self.robots[self.spectated_robot_index].name}",
-                        'info'
-                    )
             else:
                 self.ui_manager.add_notification("Exited spectator mode", 'info')
         elif event.key == pygame.K_LEFT and self.spectating:
             # Previous robot
             if self.robots:
                 self.spectated_robot_index = (self.spectated_robot_index - 1) % len(self.robots)
-                self.ui_manager.add_notification(
-                    f"Now spectating {self.robots[self.spectated_robot_index].name}",
-                    'info'
-                )
         elif event.key == pygame.K_RIGHT and self.spectating:
             # Next robot
             if self.robots:
                 self.spectated_robot_index = (self.spectated_robot_index + 1) % len(self.robots)
-                self.ui_manager.add_notification(
-                    f"Now spectating {self.robots[self.spectated_robot_index].name}",
-                    'info'
-                )
+        # Add time scale controls
+        elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
+            # Increase time scale
+            current_scale = self.environment_system.time_scale
+            new_scale = min(1.0, current_scale * 1.5)  # Increase by 50%, max 1.0
+            self.environment_system.set_time_scale(new_scale)
+            self.ui_manager.add_notification(
+                f"Time scale: {new_scale:.3f}x",
+                'info'
+            )
+        elif event.key == pygame.K_MINUS:
+            # Decrease time scale
+            current_scale = self.environment_system.time_scale
+            new_scale = max(0.001, current_scale / 1.5)  # Decrease by 33%, min 0.001
+            self.environment_system.set_time_scale(new_scale)
+            self.ui_manager.add_notification(
+                f"Time scale: {new_scale:.3f}x",
+                'info'
+            )
+        elif event.key == pygame.K_0:
+            # Reset time scale to default
+            self.environment_system.set_time_scale(0.05)  # Default time scale
+            self.ui_manager.add_notification(
+                "Time scale reset to default (0.05x)",
+                'info'
+            )
 
     def _handle_camera_movement(self) -> None:
         """Handle camera movement with smooth transitions."""
