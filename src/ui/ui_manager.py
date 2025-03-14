@@ -941,19 +941,21 @@ class UIManager:
 
     def _draw_modern_environment(self, screen: pygame.Surface,
                                environment_data: Dict[str, Any]) -> None:
-        """Draw modern environment information panel with terrain-specific weather"""
-        # Calculate panel dimensions
-        panel_width = 250
-        panel_height = 200  # Increased from 180 to 200 to ensure all content fits
+        """Draw modern environment information panel with custom-drawn icons at the top middle of the screen"""
+        # Calculate panel dimensions - now at top middle
+        panel_width = 580  # Increased width to accommodate wider parameter sections
+        panel_height = 70
         panel_rect = pygame.Rect(
-            10,  # Aligned with other panels
-            self.screen_height - panel_height - 60,  # Increased bottom margin
+            (self.screen_width - panel_width) // 2,  # Center horizontally
+            10,  # Top of screen
             panel_width,
             panel_height
         )
 
-        # Draw panel background
-        self._draw_modern_panel(screen, panel_rect, "Environment")
+        # Draw panel background with slight transparency
+        bg_color = (*self.theme['panel'][:3], 200)  # More transparent
+        pygame.draw.rect(screen, bg_color, panel_rect, border_radius=self.corner_radius)
+        pygame.draw.rect(screen, self.theme['border'], panel_rect, 1, border_radius=self.corner_radius)
 
         # Extract environment data
         time = environment_data.get('time_of_day', 0.0)
@@ -968,72 +970,222 @@ class UIManager:
             'wind': 0
         })
 
-        # Format weather info
-        weather_info = [
-            f"Time: {time:.1f}",
-            f"Season: {season}",
-            f"Terrain: {current_terrain.title()}",
-            f"Temp: {terrain_weather['temperature']:.1f}°C",
-            f"Rain: {terrain_weather['precipitation']:.2f}",
-            f"Wind: {terrain_weather['wind']:.1f} km/h"
+        # Create icon-based display with fixed spacing
+        icon_size = 24
+        param_width = 95  # Increased width for each parameter section to provide more space
+        start_x = panel_rect.x + 10
+        icon_y = panel_rect.y + (panel_height - icon_size) // 2 + 5
+        label_y = panel_rect.y + 6  # Moved up further to create more space
+
+        # Function to draw a parameter with custom icon, label and value
+        def draw_param(x, y, param_type, label, value, color=self.theme['text']):
+            # Draw label above with more separation
+            label_surf = self.fonts['small'].render(label, True, self.theme['text_secondary'])
+            label_x = x + (param_width // 2) - (label_surf.get_width() // 2)
+            screen.blit(label_surf, (label_x, label_y))
+            
+            # Format value to ensure it's a string
+            value_str = str(value)
+            
+            # Draw value with fixed width
+            value_surf = self.fonts['normal'].render(value_str, True, color)
+            
+            if param_type in ["season", "terrain"]:
+                # For season and terrain, use color indicators instead of icons
+                if param_type == "season":
+                    indicator_color = self._get_season_color(season)
+                else:  # terrain
+                    indicator_color = self._get_terrain_color(current_terrain)
+                
+                # Draw colored circle indicator
+                indicator_radius = icon_size // 2
+                circle_x = x + indicator_radius
+                pygame.draw.circle(screen, indicator_color, (circle_x, y + indicator_radius), indicator_radius)
+                pygame.draw.circle(screen, self.theme['text'], (circle_x, y + indicator_radius), indicator_radius, 1)
+                
+                # Position value right after the indicator with fixed spacing - aligned with other values
+                value_x = x + icon_size + 10  # Increased spacing between icon and value
+                screen.blit(value_surf, (value_x, y + (icon_size - value_surf.get_height()) // 2))
+            else:
+                # Draw custom icon
+                self._draw_custom_icon(screen, param_type, x, y, icon_size)
+                
+                # Position value right after the icon with fixed spacing
+                value_x = x + icon_size + 10  # Increased spacing between icon and value
+                screen.blit(value_surf, (value_x, y + (icon_size - value_surf.get_height()) // 2))
+            
+            return param_width
+
+        # Draw each parameter with fixed width
+        params = [
+            ("time", "TIME", f"{time:.1f}"),
+            ("season", "SEASON", season),
+            ("terrain", "TERRAIN", current_terrain.title()),
+            ("temp", "TEMP", f"{terrain_weather['temperature']:.1f}°C", self._get_temp_color(terrain_weather['temperature'])),
+            ("rain", "RAIN", f"{terrain_weather['precipitation']:.2f}"),
+            ("wind", "WIND", f"{terrain_weather['wind']:.1f}")
         ]
-
-        # Draw weather info with adjusted spacing
-        y_offset = panel_rect.y + 40  # Reduced from 45 to 40
-        line_spacing = 22  # Reduced from 25 to 22 for more compact layout
-        padding_left = 15  # Consistent left padding
         
-        for info in weather_info:
-            text_surf = self.fonts['normal'].render(info, True, self.theme['text'])
-            screen.blit(text_surf, (panel_rect.x + padding_left, y_offset))
-            y_offset += line_spacing
+        for i, param in enumerate(params):
+            if len(param) == 4:  # With custom color
+                param_type, label, value, color = param
+                draw_param(start_x + (i * param_width), icon_y, param_type, label, value, color)
+            else:
+                param_type, label, value = param
+                draw_param(start_x + (i * param_width), icon_y, param_type, label, value)
 
-    def _draw_modern_status_bar(self, screen: pygame.Surface,
-                               stats: Dict[str, int]) -> None:
-        """Draw a modern status bar with animations and effects"""
-        bar_height = 40
-        y = self.screen_height - bar_height
-
-        # Draw background with gradient
-        bg = pygame.Surface((self.screen_width, bar_height), pygame.SRCALPHA)
-        bg.fill((*self.theme['bg'][:3], 230))
-        screen.blit(bg, (0, y))
-
-        # Draw stats with icons
-        x = 20
-        for stat, value in stats.items():
-            stat_text = f"{stat.title()}: {value}"
-            text_surf = self.fonts['normal'].render(stat_text, True, self.theme['text'])
-            screen.blit(text_surf, (x, y + (bar_height - text_surf.get_height()) // 2))
-            x += text_surf.get_width() + 30
-
-        # Draw hotkeys with modern styling
-        hotkeys = [
-            ("[Tab] Spectate", pygame.K_TAB),
-            ("[H] Health", pygame.K_h),
-            ("[M] Map", pygame.K_m),
-            ("[T] Teams", pygame.K_t),
-            ("[ESC] Quit", pygame.K_ESCAPE)
-        ]
-
-        x = self.screen_width - 20
-        for text, key in reversed(hotkeys):
-            key_surf = self.fonts['normal'].render(text, True, self.theme['text_secondary'])
-            x -= key_surf.get_width() + 15
-            screen.blit(key_surf, (x, y + (bar_height - key_surf.get_height()) // 2))
-
-    def _draw_entity_dot(self, surface: pygame.Surface, entity: Any,
-                        world_data: Dict[str, Any], color: Tuple[int, int, int, int],
-                        size: int) -> None:
-        """Draw an entity dot on the minimap with proper scaling"""
-        scale_x = self.MINIMAP_WIDTH / (world_data['width'] * self.TILE_SIZE)
-        scale_y = self.MINIMAP_HEIGHT / (world_data['height'] * self.TILE_SIZE)
+    def _draw_custom_icon(self, surface: pygame.Surface, icon_type: str, x: int, y: int, size: int) -> None:
+        """Draw a custom geometric icon instead of text characters"""
+        # Create a surface for the icon with transparency
+        icon_surf = pygame.Surface((size, size), pygame.SRCALPHA)
         
-        x = int(entity.x * scale_x)
-        y = int(entity.y * scale_y)
-        
-        if 0 <= x < self.MINIMAP_WIDTH and 0 <= y < self.MINIMAP_HEIGHT:
-            pygame.draw.circle(surface, color, (x, y), size)
+        # Draw different icons based on type
+        if icon_type == "time":
+            # Clock icon - simplified and clearer
+            center = size // 2
+            radius = size // 2 - 2
+            
+            # Outer circle
+            pygame.draw.circle(icon_surf, self.theme['text'], (center, center), radius, 2)
+            
+            # Hour hand (shorter)
+            pygame.draw.line(icon_surf, self.theme['text'], 
+                           (center, center), 
+                           (center + radius//2, center), 2)
+            
+            # Minute hand (longer)
+            pygame.draw.line(icon_surf, self.theme['text'], 
+                           (center, center), 
+                           (center, center - radius*2//3), 2)
+            
+            # Center dot
+            pygame.draw.circle(icon_surf, self.theme['text'], (center, center), 2)
+                
+        elif icon_type == "temp":
+            # Temperature: thermometer with clearer display
+            center = size // 2
+            bulb_radius = size // 4
+            stem_width = size // 5
+            stem_height = size // 2
+            
+            # Draw thermometer bulb
+            pygame.draw.circle(icon_surf, self.theme['text'], (center, center + stem_height//2), bulb_radius, 2)
+            
+            # Draw thermometer stem
+            pygame.draw.rect(icon_surf, self.theme['panel'], 
+                           (center - stem_width//2, center - stem_height//2, stem_width, stem_height))
+            pygame.draw.rect(icon_surf, self.theme['text'], 
+                           (center - stem_width//2, center - stem_height//2, stem_width, stem_height), 2)
+                
+        elif icon_type == "rain":
+            # Rain: cloud with more visible raindrops
+            center = size // 2
+            
+            # Draw cloud - simplified
+            cloud_width = size * 3 // 4
+            cloud_height = size // 3
+            cloud_x = (size - cloud_width) // 2
+            cloud_y = size // 4
+            
+            # Draw cloud outline
+            pygame.draw.ellipse(icon_surf, self.theme['text'], 
+                              (cloud_x, cloud_y, cloud_width, cloud_height), 2)
+            
+            # Draw raindrops - simplified
+            drop_spacing = cloud_width // 3
+            for i in range(3):
+                drop_x = cloud_x + drop_spacing * (i + 0.5)
+                drop_y = cloud_y + cloud_height
+                drop_length = size // 5
+                
+                # Draw raindrop
+                pygame.draw.line(icon_surf, self.theme['text'], 
+                               (drop_x, drop_y), 
+                               (drop_x, drop_y + drop_length), 2)
+                pygame.draw.circle(icon_surf, self.theme['text'], 
+                                 (int(drop_x), int(drop_y + drop_length)), 2)
+                    
+        elif icon_type == "wind":
+            # Wind: horizontal lines with arrow tips
+            center_y = size // 2
+            line_spacing = size // 4
+            
+            # Draw three wind lines of different lengths
+            for i in range(3):
+                y_pos = center_y - line_spacing + (i * line_spacing)
+                line_length = size * (3 - i) // 4
+                start_x = (size - line_length) // 2
+                
+                # Draw main line
+                pygame.draw.line(icon_surf, self.theme['text'], 
+                               (start_x, y_pos), 
+                               (start_x + line_length, y_pos), 2)
+                
+                # Draw arrow tip
+                arrow_size = size // 8
+                pygame.draw.line(icon_surf, self.theme['text'], 
+                               (start_x + line_length, y_pos), 
+                               (start_x + line_length - arrow_size, y_pos - arrow_size//2), 2)
+                pygame.draw.line(icon_surf, self.theme['text'], 
+                               (start_x + line_length, y_pos), 
+                               (start_x + line_length - arrow_size, y_pos + arrow_size//2), 2)
+        else:
+            # Default icon: question mark
+            center = size // 2
+            pygame.draw.circle(icon_surf, self.theme['text'], (center, center), size//3, 2)
+            font = pygame.font.SysFont('arial', size//2)
+            text = font.render("?", True, self.theme['text'])
+            icon_surf.blit(text, (center - text.get_width()//2, center - text.get_height()//2))
+            
+        # Draw the icon surface
+        surface.blit(icon_surf, (x, y))
+
+    def _get_season_color(self, season: str) -> Tuple[int, int, int]:
+        """Get color for season indicator"""
+        season = season.lower()
+        if 'spring' in season:
+            return (100, 200, 100)  # Green for spring
+        elif 'summer' in season:
+            return (255, 200, 50)   # Yellow for summer
+        elif 'autumn' in season or 'fall' in season:
+            return (200, 100, 50)   # Orange/brown for autumn
+        elif 'winter' in season:
+            return (200, 200, 255)  # Light blue for winter
+        return (150, 150, 150)      # Gray for unknown
+
+    def _get_terrain_color(self, terrain: str) -> Tuple[int, int, int]:
+        """Get color for terrain indicator"""
+        terrain = terrain.lower()
+        if 'forest' in terrain:
+            return (50, 150, 50)     # Dark green for forest
+        elif 'mountain' in terrain:
+            return (150, 150, 150)   # Gray for mountains
+        elif 'desert' in terrain:
+            return (200, 180, 100)   # Tan for desert
+        elif 'aquatic' in terrain or 'water' in terrain:
+            return (50, 100, 200)    # Blue for water
+        elif 'grassland' in terrain or 'savanna' in terrain:
+            return (100, 200, 100)   # Light green for grassland
+        elif 'wetland' in terrain:
+            return (100, 150, 200)   # Blue-green for wetland
+        elif 'beach' in terrain:
+            return (240, 220, 180)   # Sand color for beach
+        elif 'hills' in terrain:
+            return (120, 170, 80)    # Olive for hills
+        return (150, 150, 150)       # Gray for unknown
+
+    def _get_temp_color(self, temp: float) -> Tuple[int, int, int]:
+        """Get color based on temperature"""
+        if temp < 0:
+            return (150, 150, 255)  # Cold blue
+        elif temp < 10:
+            return (200, 200, 255)  # Light blue
+        elif temp < 20:
+            return self.theme['text']  # Normal text color
+        elif temp < 30:
+            return (255, 200, 100)  # Orange
+        else:
+            return (255, 100, 100)  # Red
 
     def _draw_viewport_rect(self, surface: pygame.Surface, camera_pos: Tuple[int, int],
                            world_data: Dict[str, Any]) -> None:
@@ -1223,5 +1375,39 @@ class UIManager:
                 pygame.draw.rect(minimap, color, (mini_x, mini_y, mini_w, mini_h))
         
         return minimap
+
+    def _draw_modern_status_bar(self, screen: pygame.Surface,
+                               stats: Dict[str, int]) -> None:
+        """Draw a modern status bar with animations and effects"""
+        bar_height = 40
+        y = self.screen_height - bar_height
+
+        # Draw background with gradient
+        bg = pygame.Surface((self.screen_width, bar_height), pygame.SRCALPHA)
+        bg.fill((*self.theme['bg'][:3], 230))
+        screen.blit(bg, (0, y))
+
+        # Draw stats with icons
+        x = 20
+        for stat, value in stats.items():
+            stat_text = f"{stat.title()}: {value}"
+            text_surf = self.fonts['normal'].render(stat_text, True, self.theme['text'])
+            screen.blit(text_surf, (x, y + (bar_height - text_surf.get_height()) // 2))
+            x += text_surf.get_width() + 30
+
+        # Draw hotkeys with modern styling
+        hotkeys = [
+            ("[Tab] Spectate", pygame.K_TAB),
+            ("[H] Health", pygame.K_h),
+            ("[M] Map", pygame.K_m),
+            ("[T] Teams", pygame.K_t),
+            ("[ESC] Quit", pygame.K_ESCAPE)
+        ]
+
+        x = self.screen_width - 20
+        for text, key in reversed(hotkeys):
+            key_surf = self.fonts['normal'].render(text, True, self.theme['text_secondary'])
+            x -= key_surf.get_width() + 15
+            screen.blit(key_surf, (x, y + (bar_height - key_surf.get_height()) // 2))
 
 
