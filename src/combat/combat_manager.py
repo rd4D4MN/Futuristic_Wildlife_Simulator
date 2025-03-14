@@ -5,6 +5,7 @@ from entities.team import Team  # Changed from relative to absolute import
 import random
 from utils.helpers import generate_battle_story  # Import the battle story generator
 from .combat_effects import CombatEffectManager
+import math
 
 class CombatManager:
     def __init__(self):
@@ -369,3 +370,40 @@ class CombatManager:
     def draw(self, screen: pygame.Surface, camera_x: int, camera_y: int):
         """Draw combat effects."""
         self.effect_manager.draw(screen, camera_x, camera_y)
+
+    def check_territory_conflicts(self, teams: List[Team]) -> None:
+        """Check for territory conflicts between teams and initiate battles."""
+        for i, team1 in enumerate(teams):
+            for team2 in teams[i+1:]:
+                if (team1.check_territory_conflict(team2) and 
+                    team1.is_ready_for_battle(pygame.time.get_ticks() // 16) and 
+                    team2.is_ready_for_battle(pygame.time.get_ticks() // 16)):
+                    
+                    # Calculate battle chance based on territory overlap
+                    battle_chance = self._calculate_territory_battle_chance(team1, team2)
+                    
+                    if random.random() < battle_chance:
+                        self.resolve_battle(team1, team2)
+
+    def _calculate_territory_battle_chance(self, team1: Team, team2: Team) -> float:
+        """Calculate probability of territory battle occurring."""
+        # Get distance between territory centers
+        dx = team1.territory_center[0] - team2.territory_center[0]
+        dy = team1.territory_center[1] - team2.territory_center[1]
+        distance = math.sqrt(dx * dx + dy * dy)
+        
+        # Calculate overlap percentage
+        max_distance = team1.territory_radius + team2.territory_radius
+        overlap = max(0, (max_distance - distance) / max_distance)
+        
+        # Base chance increases with overlap
+        base_chance = overlap * 0.8  # Max 80% chance for complete overlap
+        
+        # Modify based on formations
+        if team1.formation == 'aggressive' or team2.formation == 'aggressive':
+            base_chance *= 1.5
+        elif team1.formation == 'defensive' and team2.formation == 'defensive':
+            base_chance *= 0.5
+            
+        # Cap final chance
+        return min(0.95, base_chance)

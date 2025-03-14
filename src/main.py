@@ -89,6 +89,7 @@ class GameState:
         self.resource_manager = ResourceManager.get_instance()
         self.environment_system = EnvironmentSystem(self.world_grid)
         self.evolution_manager = EvolutionManager(self.processed_animals)
+        self.evolution_manager.world_grid = self.world_grid  # Add world grid reference
 
         # World data for UI
         self.world_data = {
@@ -120,7 +121,7 @@ class GameState:
 
 
     def _spawn_animals(self, num_animals: int = 100) -> List[Animal]:
-        """Spawn animals across the map with improved distribution and ecosystem balance."""
+        """Spawn animals across the map, prioritizing their preferred habitats."""
         spawn_points = get_spawn_points_by_terrain(self.world_grid)
         animals = []
 
@@ -129,24 +130,44 @@ class GameState:
         world_height_px = len(self.world_grid) * TILE_SIZE
         safe_margin = TILE_SIZE * 2  # Keep animals away from edges
 
+        # Create valid spawn locations dictionary
+        valid_spawn_locations = {}
+        for terrain_type, locations in spawn_points.items():
+            valid_spawn_locations[terrain_type] = [
+                (x, y) for x, y in locations
+                if (safe_margin <= x * TILE_SIZE <= world_width_px - safe_margin and
+                    safe_margin <= y * TILE_SIZE <= world_height_px - safe_margin)
+            ]
+
         # Group animals by their primary habitat and diet type
         habitat_groups = {}
         diet_groups = {'carnivore': [], 'herbivore': [], 'omnivore': []}
+        animal_habitat_map = {}  # Maps animal name to preferred habitat
         
         # First, categorize all animals
         for _, row in self.processed_animals.iterrows():
             if pd.isna(row['Animal']) or pd.isna(row['Habitat']):
                 continue
                 
-            habitat = self._get_terrain_for_habitat(str(row['Habitat']).lower())
-            diet = str(row['Diet_Type']).lower()
+            animal_data = row.to_dict()
+            animal_name = animal_data['Animal']
+            habitat_str = str(animal_data['Habitat']).lower()
+            diet = str(animal_data['Diet_Type']).lower()
             
-            if habitat not in habitat_groups:
-                habitat_groups[habitat] = []
-            habitat_groups[habitat].append(row.to_dict())
+            # Determine preferred habitat with improved detection
+            preferred_habitat = self._get_terrain_for_habitat(habitat_str)
             
+            # Store animal's preferred habitat
+            animal_habitat_map[animal_name] = preferred_habitat
+            
+            # Group by habitat
+            if preferred_habitat not in habitat_groups:
+                habitat_groups[preferred_habitat] = []
+            habitat_groups[preferred_habitat].append(animal_data)
+            
+            # Group by diet
             if diet in diet_groups:
-                diet_groups[diet].append(row.to_dict())
+                diet_groups[diet].append(animal_data)
 
         # Calculate target numbers for each diet type
         total_spawns = {
@@ -164,82 +185,191 @@ class GameState:
             total_spawns['carnivore'] += remaining // 4
             total_spawns['omnivore'] += remaining - (remaining // 2) - (remaining // 4)
 
-        # Create valid spawn locations dictionary
-        valid_spawn_locations = {}
-        for terrain_type, locations in spawn_points.items():
-            valid_spawn_locations[terrain_type] = [
-                (x, y) for x, y in locations
-                if (safe_margin <= x * TILE_SIZE <= world_width_px - safe_margin and
-                    safe_margin <= y * TILE_SIZE <= world_height_px - safe_margin)
-            ]
-
-        # Main spawning loop - continue until we reach the target number
+        # Track spawning statistics
         spawned_per_terrain = {terrain: 0 for terrain in spawn_points.keys()}
         total_spawned = 0
         spawn_attempts = 0
         max_attempts = num_animals * 10
+        
+        # Create a list of all animal data sorted by diet to ensure balanced ecosystem
+        all_animals_by_diet = []
+        for diet, count in total_spawns.items():
+            diet_animals = [a for a in diet_groups.get(diet, []) if a['Animal'] in animal_habitat_map]
+            if diet_animals:
+                # Add animals of this diet type according to target count
+                for _ in range(count):
+                    if diet_animals:  # Check again in case we ran out
+                        all_animals_by_diet.append(random.choice(diet_animals))
 
+        # Shuffle to avoid patterns
+        random.shuffle(all_animals_by_diet)
+        
+        # Main spawning loop - try to spawn each animal in its preferred habitat
+        while all_animals_by_diet and total_spawned < num_animals and spawn_attempts < max_attempts:
+            spawn_attempts += 1
+            
+            # Get next animal to spawn
+            animal_data = all_animals_by_diet.pop(0)
+            animal_name = animal_data['Animal']
+            preferred_habitat = animal_habitat_map.get(animal_name, 'grassland')
+            
+            # Try to spawn in preferred habitat first
+            spawned = False
+            
+            # Define habitat priority: preferred first, then survivable, then any
+            habitat_priority = [preferred_habitat]
+            
+            # Add survivable habitats as fallback
+            # This is a simplified version - in a real implementation, you'd use the
+            # terrain compatibility logic from the Animal class
+            if preferred_habitat == 'aquatic':
+                habitat_priority.append('wetland')
+            elif preferred_habitat == 'forest':
+                habitat_priority.extend(['grassland', 'wetland'])
+            elif preferred_habitat == 'mountain':
+                habitat_priority.extend(['forest', 'grassland'])
+            elif preferred_habitat == 'desert':
+                habitat_priority.append('grassland')
+            elif preferred_habitat == 'grassland':
+                habitat_priority.extend(['forest', 'desert'])
+            elif preferred_habitat == 'wetland':
+                habitat_priority.extend(['aquatic', 'grassland'])
+            
+            # Try each habitat in priority order
+            for habitat in habitat_priority:
+                if habitat in valid_spawn_locations and valid_spawn_locations[habitat]:
+                    # Found a valid location in this habitat
+                    spawn_x, spawn_y = random.choice(valid_spawn_locations[habitat])
+                    base_x = spawn_x * TILE_SIZE
+                    base_y = spawn_y * TILE_SIZE
+                    
+                    # Create the animal
+                    animal = Animal(animal_data['Animal'], animal_data)
+                    
+                    # Add position variation within the tile
+                    spread = TILE_SIZE // 2
+                    angle = random.random() * 2 * math.pi
+                    distance = random.random() * spread
+                    animal.x = base_x + math.cos(angle) * distance
+                    animal.y = base_y + math.sin(angle) * distance
+                    
+                    # Ensure position is within bounds
+                    animal.x = max(safe_margin, min(animal.x, world_width_px - safe_margin))
+                    animal.y = max(safe_margin, min(animal.y, world_height_px - safe_margin))
+                    
+                    animal.world_grid = self.world_grid
+                    animals.append(animal)
+                    
+                    # Update counters
+                    spawned_per_terrain[habitat] += 1
+                    total_spawned += 1
+                    spawned = True
+                    
+                    # Remove the used spawn point to avoid overcrowding
+                    valid_spawn_locations[habitat].remove((spawn_x, spawn_y))
+                    
+                    break  # Successfully spawned, move to next animal
+            
+            # If we couldn't spawn in any preferred or survivable habitat, try any available habitat
+            if not spawned:
+                # Try any terrain with available spawn points
+                available_terrains = [t for t in valid_spawn_locations if valid_spawn_locations[t]]
+                if available_terrains:
+                    terrain = random.choice(available_terrains)
+                    spawn_x, spawn_y = random.choice(valid_spawn_locations[terrain])
+                    base_x = spawn_x * TILE_SIZE
+                    base_y = spawn_y * TILE_SIZE
+                    
+                    # Create the animal
+                    animal = Animal(animal_data['Animal'], animal_data)
+                    
+                    # Add position variation within the tile
+                    spread = TILE_SIZE // 2
+                    angle = random.random() * 2 * math.pi
+                    distance = random.random() * spread
+                    animal.x = base_x + math.cos(angle) * distance
+                    animal.y = base_y + math.sin(angle) * distance
+                    
+                    # Ensure position is within bounds
+                    animal.x = max(safe_margin, min(animal.x, world_width_px - safe_margin))
+                    animal.y = max(safe_margin, min(animal.y, world_height_px - safe_margin))
+                    
+                    animal.world_grid = self.world_grid
+                    animals.append(animal)
+                    
+                    # Update counters
+                    spawned_per_terrain[terrain] += 1
+                    total_spawned += 1
+                    
+                    # Remove the used spawn point
+                    valid_spawn_locations[terrain].remove((spawn_x, spawn_y))
+            
+            # If we've reached our target number, stop spawning
+            if total_spawned >= num_animals:
+                break
+                
+        # If we still need more animals, add them in any available terrain
         while total_spawned < num_animals and spawn_attempts < max_attempts:
             spawn_attempts += 1
             
-            # Try each terrain type
-            for terrain_type in list(spawn_points.keys()):
-                if not valid_spawn_locations[terrain_type]:
-                    continue
-
-                # Get suitable animals for this terrain
-                suitable_animals = habitat_groups.get(terrain_type, [])
-                if not suitable_animals:
-                    continue
-
-                # Select animal based on diet balance
-                available_diets = [diet for diet, count in total_spawns.items() if count > 0]
-                if not available_diets:
-                    continue
-
-                chosen_diet = random.choice(available_diets)
-                suitable_by_diet = [a for a in suitable_animals if str(a.get('Diet_Type', '')).lower() == chosen_diet]
+            # Find any terrain with available spawn points
+            available_terrains = [t for t in valid_spawn_locations if valid_spawn_locations[t]]
+            if not available_terrains:
+                break  # No more spawn points available
                 
-                if not suitable_by_diet:
-                    continue
-
-                # Try to spawn an animal
-                spawn_x, spawn_y = random.choice(valid_spawn_locations[terrain_type])
-                base_x = spawn_x * TILE_SIZE
-                base_y = spawn_y * TILE_SIZE
-
-                # Select and create animal
-                animal_data = random.choice(suitable_by_diet)
-                animal = Animal(animal_data['Animal'], animal_data)
+            terrain = random.choice(available_terrains)
+            spawn_x, spawn_y = random.choice(valid_spawn_locations[terrain])
+            
+            # Find animals that can survive in this terrain
+            suitable_animals = []
+            for diet, animals_list in diet_groups.items():
+                if total_spawns.get(diet, 0) > 0:  # If we still need animals of this diet
+                    suitable_animals.extend(animals_list)
+            
+            if not suitable_animals:
+                # If no suitable animals, use any animal
+                suitable_animals = [a for diet_list in diet_groups.values() for a in diet_list]
+            
+            if not suitable_animals:
+                break  # No suitable animals found
                 
-                # Add position variation within the tile
-                spread = TILE_SIZE // 2
-                angle = random.random() * 2 * math.pi
-                distance = random.random() * spread
-                animal.x = base_x + math.cos(angle) * distance
-                animal.y = base_y + math.sin(angle) * distance
-                
-                # Ensure position is within bounds
-                animal.x = max(safe_margin, min(animal.x, world_width_px - safe_margin))
-                animal.y = max(safe_margin, min(animal.y, world_height_px - safe_margin))
-                
-                animal.world_grid = self.world_grid
-                animals.append(animal)
-                
-                # Update counters
-                total_spawns[chosen_diet] -= 1
-                spawned_per_terrain[terrain_type] += 1
-                total_spawned += 1
-                
-                if total_spawned >= num_animals:
-                    break
+            # Select and create animal
+            animal_data = random.choice(suitable_animals)
+            animal = Animal(animal_data['Animal'], animal_data)
+            
+            # Set position
+            base_x = spawn_x * TILE_SIZE
+            base_y = spawn_y * TILE_SIZE
+            
+            # Add position variation
+            spread = TILE_SIZE // 2
+            angle = random.random() * 2 * math.pi
+            distance = random.random() * spread
+            animal.x = base_x + math.cos(angle) * distance
+            animal.y = base_y + math.sin(angle) * distance
+            
+            # Ensure position is within bounds
+            animal.x = max(safe_margin, min(animal.x, world_width_px - safe_margin))
+            animal.y = max(safe_margin, min(animal.y, world_height_px - safe_margin))
+            
+            animal.world_grid = self.world_grid
+            animals.append(animal)
+            
+            # Update counters
+            diet = str(animal_data.get('Diet_Type', '')).lower()
+            if diet in total_spawns:
+                total_spawns[diet] -= 1
+            spawned_per_terrain[terrain] += 1
+            total_spawned += 1
+            
+            # Remove the used spawn point
+            valid_spawn_locations[terrain].remove((spawn_x, spawn_y))
 
         if self.debug_mode:
             print(f"\nSpawn Summary:")
             print(f"Successfully spawned {len(animals)} animals after {spawn_attempts} attempts")
             print(f"Animals per terrain: {spawned_per_terrain}")
-            print(f"Remaining target spawns: {total_spawns}")
-        
+            
         return animals
 
     def _get_terrain_for_habitat(self, habitat: str) -> str:
@@ -365,7 +495,7 @@ class GameState:
                         self.event_manager.add_team_formation(id(robot), team.members)
 
     def _handle_battles(self) -> None:
-        """Handle battles between nearby teams."""
+        """Handle battles between nearby teams and territory conflicts."""
         battle_range = 600.0  # Increased from 400
         min_team_size = 2
 
@@ -391,12 +521,25 @@ class GameState:
                 dy = team2_pos[1] - team1_pos[1]
                 dist = math.sqrt(dx**2 + dy**2)
 
-                # Higher chance of battle when closer
+                # Check for territory conflict
+                territory_conflict = False
+                for member in team1.members:
+                    if team2.is_in_territory((member.x, member.y)):
+                        territory_conflict = True
+                        break
+                if not territory_conflict:
+                    for member in team2.members:
+                        if team1.is_in_territory((member.x, member.y)):
+                            territory_conflict = True
+                            break
+
+                # Higher chance of battle when closer or in territory conflict
                 base_chance = 0.2  # Increased from 0.1
                 proximity_bonus = max(0, (battle_range - dist) / battle_range)
-                battle_chance = base_chance + (proximity_bonus * 0.3)
+                territory_bonus = 0.4 if territory_conflict else 0.0
+                battle_chance = base_chance + (proximity_bonus * 0.3) + territory_bonus
 
-                if (dist < battle_range and 
+                if ((dist < battle_range or territory_conflict) and 
                     team1.get_total_health() > 0 and 
                     team2.get_total_health() > 0 and
                     random.random() < battle_chance):
@@ -407,14 +550,17 @@ class GameState:
                         engaged_teams.add(team1)
                         engaged_teams.add(team2)
                         
+                        # Add territory context to battle result
+                        if territory_conflict:
+                            battle_result['result']['context'] = 'territory_conflict'
+                        
                         self.event_manager.add_event('battle', battle_result)
                         self.ui_manager.recent_battles.append(
                             (self.frame_count, battle_result['result'])
                         )
                         
                         winner = team1 if battle_result['result'].get('winner') == team1.get_leader_name() else team2
-                        winner.experience += 50
-
+                        winner.experience += 50 + (25 if territory_conflict else 0)  # Extra XP for territory defense
 
     def update(self, dt: float) -> None:
         """Update game state."""
@@ -579,6 +725,31 @@ class GameState:
                 f"{entity.name}",
                 f"Health: {int(entity.health)}/{int(entity.max_health)}"
             ]
+            
+            # Add terrain information and effects
+            if hasattr(entity, 'current_terrain') and entity.current_terrain:
+                terrain_compatibility = entity._get_terrain_compatibility(entity.current_terrain)
+                
+                # Add terrain info
+                tooltip_lines.append(f"Current Terrain: {entity.current_terrain}")
+                tooltip_lines.append(f"Preferred Habitat: {entity.preferred_habitat}")
+                
+                # Add compatibility and effects
+                if terrain_compatibility == 'optimal':
+                    tooltip_lines.append("Terrain: Optimal (Health +)")
+                elif terrain_compatibility == 'survivable':
+                    tooltip_lines.append("Terrain: Survivable")
+                elif terrain_compatibility == 'harmful':
+                    tooltip_lines.append("Terrain: Harmful (Health -)")
+                
+                # Add speed effect if not normal
+                if entity.terrain_speed_effect != 1.0:
+                    speed_effect = int((entity.terrain_speed_effect - 1.0) * 100)
+                    if speed_effect < 0:
+                        tooltip_lines.append(f"Speed: {speed_effect}%")
+                    else:
+                        tooltip_lines.append(f"Speed: +{speed_effect}%")
+            
             if entity.team:
                 tooltip_lines.extend([
                     f"Team: {entity.team.get_leader_name()}",

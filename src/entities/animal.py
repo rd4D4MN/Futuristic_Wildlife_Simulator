@@ -1,10 +1,12 @@
 import random
 import math
 import pygame
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 import os
-from evolution.genome import Genome
-from src.entities.team import Team
+from src.evolution.genome import Genome
+
+if TYPE_CHECKING:
+    from src.entities.team import Team
 
 
 class Animal(pygame.sprite.Sprite):
@@ -31,7 +33,8 @@ class Animal(pygame.sprite.Sprite):
         self.y = 0
         self.dx = 0
         self.dy = 0
-        self.speed = float(data.get('Speed_Max', 30))
+        self.base_speed = float(data.get('Speed_Max', 30))  # Store base speed
+        self.speed = self.base_speed  # Current speed (may be modified by terrain)
         self.direction = random.uniform(0, 2 * math.pi)
         
         # Combat attributes
@@ -50,6 +53,12 @@ class Animal(pygame.sprite.Sprite):
         
         # Environmental attributes
         self.habitat = str(data.get('Habitat', 'Grassland'))
+        self.preferred_habitat = self._parse_habitat(self.habitat)
+        self.terrain_health_effect = 0.0  # Default: no effect
+        self.terrain_speed_effect = 1.0   # Default: normal speed
+        self.current_terrain = None
+        self.terrain_effect_timer = 0.0   # Timer for periodic terrain effects
+        
         # Handle combat traits with proper validation
         combat_traits = data.get('Combat_Traits', 'none')
         if isinstance(combat_traits, list):
@@ -79,7 +88,6 @@ class Animal(pygame.sprite.Sprite):
         w_max = data.get("Weight_Max", 10.0)
         self.height = random.uniform(0.5 * h_max, h_max)
         self.weight = random.uniform(0.5 * w_max, w_max)
-        self.speed = max(1.0, data.get("Speed_Max", 5.0))
 
         # Combat attributes
         self.defense = 1.0 + (self.armor_rating - 1.0)
@@ -100,7 +108,6 @@ class Animal(pygame.sprite.Sprite):
         self.team = None
 
         # Habitat and behavior
-        self.preferred_habitat = self._parse_habitat(data.get('Habitat', ''))
         self.is_social = 'social' in data.get('Social_Structure', '').lower()
         self.group_distance = 50 if self.is_social else 100
         self.separation_distance = 20
@@ -117,6 +124,10 @@ class Animal(pygame.sprite.Sprite):
     
     def _is_valid_position(self, new_x: float, new_y: float, world_grid) -> bool:
         """Check if new position is valid based on terrain and bounds."""
+        # Check for NaN values first to prevent errors
+        if math.isnan(new_x) or math.isnan(new_y):
+            return False
+            
         # Convert to grid coordinates
         grid_x = int(new_x // 8)
         grid_y = int(new_y // 8)
@@ -127,16 +138,10 @@ class Animal(pygame.sprite.Sprite):
                 margin <= grid_y < len(world_grid) - margin):
             return False
             
-        # Check terrain compatibility
+        # Check terrain - allow movement into any terrain, but with consequences
         try:
-            terrain = world_grid[grid_y][grid_x]
-            if not self.can_survive_in(terrain):
-                # Allow some movement in non-preferred terrain to prevent getting stuck
-                current_x = int(self.x // 8)
-                current_y = int(self.y // 8)
-                if abs(current_x - grid_x) <= 1 and abs(current_y - grid_y) <= 1:
-                    return True
-                return False
+            # We'll still check the terrain type, but we won't restrict movement
+            # The consequences will be applied in _update_terrain_effects
             return True
         except IndexError:
             return False
@@ -147,6 +152,9 @@ class Animal(pygame.sprite.Sprite):
             return
 
         self.age += dt
+        
+        # Update current terrain and apply terrain effects
+        self._update_terrain_effects(dt, world_grid)
 
         if self.team:
             # Team behavior takes precedence
@@ -155,16 +163,93 @@ class Animal(pygame.sprite.Sprite):
         # Solo behavior
         self._update_movement(dt, environment, world_grid, nearby_entities)
 
+    def _update_terrain_effects(self, dt: float, world_grid):
+        """Apply effects based on the current terrain with more noticeable effects."""
+        # Validate input
+        if dt <= 0 or math.isnan(dt):
+            return
+            
+        # Get current terrain
+        current_terrain = self._get_current_terrain(world_grid)
+        self.current_terrain = current_terrain
+        
+        # Check terrain compatibility
+        compatibility = self._get_terrain_compatibility(current_terrain)
+        
+        # Apply terrain effects based on compatibility
+        if compatibility == 'optimal':
+            # In optimal terrain: health regeneration and normal speed
+            self.terrain_health_effect = 1.0
+            self.terrain_speed_effect = 1.0
+            
+            # Heal slowly in optimal terrain
+            self.terrain_effect_timer += dt
+            if self.terrain_effect_timer >= 5.0:  # Every 5 seconds
+                self.heal(self.max_health * 0.01)  # Heal 1% of max health
+                self.terrain_effect_timer = 0.0
+                
+        elif compatibility == 'survivable':
+            # In survivable terrain: no health effect, slightly reduced speed
+            self.terrain_health_effect = 0.0
+            self.terrain_speed_effect = 0.8
+            self.terrain_effect_timer = 0.0
+            
+        elif compatibility == 'harmful':
+            # In harmful terrain: health decrease and greatly reduced speed
+            self.terrain_health_effect = -1.0
+            self.terrain_speed_effect = 0.4
+            
+            # Take damage in harmful terrain - more damage for aquatic animals on land
+            self.terrain_effect_timer += dt
+            damage_multiplier = 2.0 if self.preferred_habitat == 'aquatic' and current_terrain != 'aquatic' and current_terrain != 'wetland' else 1.0
+            
+            if self.terrain_effect_timer >= 3.0:  # Every 3 seconds
+                self.take_damage(self.max_health * 0.02 * damage_multiplier)  # Lose 2-4% of max health
+                self.terrain_effect_timer = 0.0
+        
+        # Apply speed effect with validation
+        if not math.isnan(self.base_speed) and not math.isnan(self.terrain_speed_effect):
+            self.speed = self.base_speed * self.terrain_speed_effect
+        else:
+            # Reset to default if NaN values are detected
+            self.speed = 30.0  # Default speed
+
+    def _get_current_terrain(self, world_grid) -> str:
+        """Get the terrain type at the animal's current position."""
+        try:
+            # Check for NaN values first to prevent errors
+            if math.isnan(self.x) or math.isnan(self.y):
+                return 'grassland'  # Default if coordinates are invalid
+                
+            grid_x = int(self.x // 8)
+            grid_y = int(self.y // 8)
+            
+            if 0 <= grid_x < len(world_grid[0]) and 0 <= grid_y < len(world_grid):
+                return world_grid[grid_y][grid_x]
+            return 'grassland'  # Default if out of bounds
+        except (IndexError, TypeError):
+            return 'grassland'  # Default if error
+
     def _update_movement(self, dt: float, environment, world_grid, nearby_entities) -> None:
         """Update movement based on environment and nearby entities."""
+        # Validate inputs to prevent NaN values
+        if dt <= 0 or math.isnan(dt) or math.isnan(self.speed):
+            return
+            
         # Random movement with persistence
         if random.random() < 0.02:  # Change direction occasionally
             self.direction += random.uniform(-math.pi/4, math.pi/4)
             
-        # Calculate movement
+        # Calculate movement with terrain-adjusted speed
         self.dx = math.cos(self.direction) * self.speed * dt
         self.dy = math.sin(self.direction) * self.speed * dt
         
+        # Check for NaN values in movement
+        if math.isnan(self.dx) or math.isnan(self.dy):
+            self.dx = 0
+            self.dy = 0
+            return
+            
         # Apply movement if valid position
         new_x = self.x + self.dx
         new_y = self.y + self.dy
@@ -175,7 +260,7 @@ class Animal(pygame.sprite.Sprite):
         else:
             # Bounce off boundaries
             self.direction += math.pi + random.uniform(-math.pi/4, math.pi/4)
-            
+
     def _wander(self, world_grid, effective_speed, dt):
         """Move randomly within valid bounds."""
         if self.direction_timer <= 0:
@@ -212,74 +297,91 @@ class Animal(pygame.sprite.Sprite):
 
     def can_survive_in(self, terrain_type: str) -> bool:
         """Check if the animal can survive in the given terrain."""
+        compatibility = self._get_terrain_compatibility(terrain_type)
+        return compatibility in ['optimal', 'survivable']
+    
+    def _get_terrain_compatibility(self, terrain_type: str) -> str:
+        """Get the compatibility level for a terrain type with stricter rules."""
+        # If we don't have original data, use a default
+        if not hasattr(self, 'original_data') or not self.original_data:
+            return 'optimal' if terrain_type == self.preferred_habitat else 'harmful'
+            
         habitat_str = self.original_data.get('Habitat', '').lower()
         
-        # Direct terrain mappings
+        # Direct terrain mappings with more keywords
         terrain_mappings = {
-            'aquatic': ['ocean', 'water', 'marine', 'coastal', 'river', 'lake'],
-            'forest': ['forest', 'woodland', 'rainforest', 'jungle'],
-            'mountain': ['mountain', 'alpine', 'highland'],
-            'desert': ['desert', 'arid', 'sand'],
-            'grassland': ['grassland', 'savanna', 'prairie', 'plain'],
-            'wetland': ['swamp', 'marsh', 'wetland', 'mangrove']
+            'aquatic': ['ocean', 'water', 'marine', 'coastal', 'river', 'lake', 'sea', 'aquatic'],
+            'forest': ['forest', 'woodland', 'rainforest', 'jungle', 'woods'],
+            'mountain': ['mountain', 'alpine', 'highland', 'hill', 'cliff'],
+            'desert': ['desert', 'arid', 'sand', 'dune', 'dry'],
+            'grassland': ['grassland', 'savanna', 'prairie', 'plain', 'meadow', 'field'],
+            'wetland': ['swamp', 'marsh', 'wetland', 'mangrove', 'bog']
         }
         
-        # Find primary terrain type from habitat
+        # Find primary terrain type from habitat with name-based detection
         primary_terrain = 'grassland'  # Default
         for terrain, keywords in terrain_mappings.items():
-            if any(keyword in habitat_str for keyword in keywords):
+            if any(keyword in habitat_str for keyword in keywords) or any(keyword in self.name.lower() for keyword in keywords):
                 primary_terrain = terrain
                 break
         
+        # Store the detected habitat
         self.preferred_habitat = primary_terrain
         
-        # Define terrain compatibility levels
-        terrain_compatibility = {
-            'aquatic': {
+        # Define terrain compatibility levels with stricter rules for specialized animals
+        # Aquatic animals should suffer more in non-aquatic environments
+        if primary_terrain == 'aquatic':
+            terrain_compatibility = {
                 'optimal': ['aquatic'],
-                'survivable': ['wetland'],
-                'harmful': ['grassland', 'forest', 'desert', 'mountain']
-            },
-            'forest': {
-                'optimal': ['forest'],
-                'survivable': ['grassland', 'wetland'],
-                'harmful': ['desert', 'mountain', 'aquatic']
-            },
-            'mountain': {
-                'optimal': ['mountain'],
-                'survivable': ['forest', 'grassland'],
-                'harmful': ['desert', 'aquatic', 'wetland']
-            },
-            'desert': {
-                'optimal': ['desert'],
-                'survivable': ['grassland'],
-                'harmful': ['forest', 'mountain', 'aquatic', 'wetland']
-            },
-            'grassland': {
-                'optimal': ['grassland'],
-                'survivable': ['forest', 'desert'],
-                'harmful': ['mountain', 'aquatic', 'wetland']
-            },
-            'wetland': {
-                'optimal': ['wetland'],
-                'survivable': ['aquatic', 'grassland'],
-                'harmful': ['desert', 'mountain']
+                'survivable': ['wetland'],  # Only wetlands are survivable
+                'harmful': ['grassland', 'forest', 'desert', 'mountain']  # Everything else is harmful
             }
-        }
+        else:
+            # Standard compatibility for other animals
+            terrain_compatibility = {
+                'aquatic': {
+                    'optimal': ['aquatic'],
+                    'survivable': ['wetland'],
+                    'harmful': ['grassland', 'forest', 'desert', 'mountain']
+                },
+                'forest': {
+                    'optimal': ['forest'],
+                    'survivable': ['grassland', 'wetland'],
+                    'harmful': ['desert', 'mountain', 'aquatic']
+                },
+                'mountain': {
+                    'optimal': ['mountain'],
+                    'survivable': ['forest', 'grassland'],
+                    'harmful': ['desert', 'aquatic', 'wetland']
+                },
+                'desert': {
+                    'optimal': ['desert'],
+                    'survivable': ['grassland'],
+                    'harmful': ['forest', 'mountain', 'aquatic', 'wetland']
+                },
+                'grassland': {
+                    'optimal': ['grassland'],
+                    'survivable': ['forest', 'desert'],
+                    'harmful': ['mountain', 'aquatic', 'wetland']
+                },
+                'wetland': {
+                    'optimal': ['wetland'],
+                    'survivable': ['aquatic', 'grassland'],
+                    'harmful': ['desert', 'mountain']
+                }
+            }
         
         # Get compatibility for current terrain
-        compatibility = terrain_compatibility.get(self.preferred_habitat, {})
+        compatibility = terrain_compatibility.get(primary_terrain, {})
         if terrain_type in compatibility.get('optimal', []):
-            self.terrain_health_effect = 1.0  # Health regeneration
-            return True
+            return 'optimal'
         elif terrain_type in compatibility.get('survivable', []):
-            self.terrain_health_effect = 0.0  # No health change
-            return True
+            return 'survivable'
         elif terrain_type in compatibility.get('harmful', []):
-            self.terrain_health_effect = -1.0  # Health decrease
-            return False
+            return 'harmful'
         
-        return False
+        # Default to harmful if unknown - stricter default
+        return 'harmful'
 
     def get_optimal_terrains(self) -> List[str]:
         """Get list of optimal terrains for this animal."""
@@ -309,7 +411,14 @@ class Animal(pygame.sprite.Sprite):
         """Draw the animal and its health bar if enabled."""
         if self.health <= 0:
             return
+            
+        # Validate position to prevent rendering issues
+        if math.isnan(self.x) or math.isnan(self.y):
+            return
+        
+        # Simply draw the animal without the red blinking effect
         screen.blit(self.image, (self.x - camera_x, self.y - camera_y))
+            
         if show_health_bars:
             self._draw_health_bar(screen, camera_x, camera_y)
 
@@ -339,6 +448,28 @@ class Animal(pygame.sprite.Sprite):
         # Center the health bar above the sprite
         bar_x = self.x - camera_x - (bar_width // 2) + 32  # Add half sprite width
         bar_y = self.y - camera_y - 10  # Position above sprite
+        
+        # Arrow size and position (common for both up and down arrows)
+        arrow_size = bar_height * 1.5  # Smaller arrow
+        arrow_x = bar_x - arrow_size - 2  # Position left of health bar with space
+        arrow_y = bar_y + (bar_height / 2) - (arrow_size / 2)  # Center vertically with health bar
+        
+        # Draw HP down indicator if in harmful terrain
+        if hasattr(self, 'terrain_health_effect') and self.terrain_health_effect < 0:
+            # Draw a downward-pointing arrow (red)
+            pygame.draw.polygon(screen, (255, 0, 0), [
+                (arrow_x, arrow_y + arrow_size),  # Bottom point
+                (arrow_x - arrow_size/2, arrow_y),  # Top left
+                (arrow_x + arrow_size/2, arrow_y)   # Top right
+            ])
+        # Draw HP up indicator if in optimal terrain (regenerating health)
+        elif hasattr(self, 'terrain_health_effect') and self.terrain_health_effect > 0:
+            # Draw an upward-pointing arrow (green)
+            pygame.draw.polygon(screen, (0, 255, 0), [
+                (arrow_x, arrow_y),  # Top point
+                (arrow_x - arrow_size/2, arrow_y + arrow_size),  # Bottom left
+                (arrow_x + arrow_size/2, arrow_y + arrow_size)   # Bottom right
+            ])
         
         # Draw background (red)
         pygame.draw.rect(screen, (200, 0, 0), (bar_x, bar_y, bar_width, bar_height))
@@ -374,16 +505,21 @@ class Animal(pygame.sprite.Sprite):
             return surf
 
     def _parse_habitat(self, habitat_str: str) -> str:
-        """Parse habitat string to determine preferred terrain."""
+        """Parse habitat string to determine preferred terrain with improved detection."""
         habitat_str = habitat_str.lower()
-        if any(term in habitat_str for term in ['water', 'marine']):
+        
+        # More comprehensive detection for aquatic animals
+        aquatic_keywords = ['water', 'marine', 'ocean', 'sea', 'lake', 'river', 'aquatic', 'fish', 'penguin', 'shark', 'whale']
+        if any(keyword in habitat_str for keyword in aquatic_keywords) or 'fish' in self.name.lower() or 'penguin' in self.name.lower():
             return 'aquatic'
-        elif 'forest' in habitat_str:
+        elif 'forest' in habitat_str or 'jungle' in habitat_str or 'woodland' in habitat_str:
             return 'forest'
-        elif 'mountain' in habitat_str:
+        elif 'mountain' in habitat_str or 'alpine' in habitat_str or 'highland' in habitat_str:
             return 'mountain'
-        elif 'desert' in habitat_str:
+        elif 'desert' in habitat_str or 'arid' in habitat_str or 'sand' in habitat_str:
             return 'desert'
+        elif 'swamp' in habitat_str or 'marsh' in habitat_str or 'wetland' in habitat_str:
+            return 'wetland'
         return 'grassland'
 
     def _parse_natural_weapons(self, weapons_str: str) -> List[str]:

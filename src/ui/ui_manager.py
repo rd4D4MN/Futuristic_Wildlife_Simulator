@@ -224,13 +224,13 @@ class UIManager:
         # Draw main UI panels
         if self.show_minimap:
             self._draw_modern_minimap(cached_surface, world_data, camera_pos, 
-                                   {'animals': animals, 'robots': robots})
+                                   {'animals': animals, 'robots': robots, 'teams': teams})
         
         if self.show_team_overview:
             self._draw_modern_team_overview(cached_surface, teams)
         
         if self.show_battle_log:
-            self._draw_modern_battle_log(cached_surface)
+            self._draw_battle_log(cached_surface)
         
         if self.show_environment and environment_data:
             self._draw_modern_environment(cached_surface, environment_data)
@@ -525,67 +525,87 @@ class UIManager:
                             y + (bar_height - hotkeys.get_height()) // 2))
 
     def _draw_battle_log(self, screen: pygame.Surface) -> None:
-        """Draw an optimized battle log with caching."""
+        """Draw a modern battle log with animations and effects"""
         if not self.recent_battles:
             return
             
-        panel_width = 350
+        # Calculate panel dimensions and position
+        panel_width = 480  # Slightly increased width to better fit content
         panel_height = 200
-        padding = 12
+        panel_rect = pygame.Rect(
+            self.screen_width - panel_width - 20,
+            self.MINIMAP_HEIGHT + 80,
+            panel_width,
+            panel_height
+        )
+
+        # Draw panel background
+        self._draw_modern_panel(screen, panel_rect, "Recent Battles")
+
+        # Draw column headers
+        headers = ["Attacker", "Defender", "Result", "Att. Cas.", "Def. Cas."]
+        header_widths = [120, 120, 80, 70, 70]  # Adjusted widths for better spacing
+        x_offset = panel_rect.x + 10
+        y_offset = panel_rect.y + 40
+
+        for header, width in zip(headers, header_widths):
+            header_surf = self.fonts['small'].render(header, True, self.theme['text_secondary'])
+            screen.blit(header_surf, (x_offset, y_offset))
+            x_offset += width
+
+        # Draw battle entries with animations
+        y_offset = panel_rect.y + 65
+        max_visible_battles = 3
         
-        # Check if we need to update the cached surface
-        current_battle_count = len(self.recent_battles)
-        self.frame_counter = (self.frame_counter + 1) % self.battle_log_update_interval
-        
-        if (self.battle_log_surface is None or 
-            current_battle_count != self.last_battle_count or 
-            self.frame_counter == 0):
+        for frame, result in list(reversed(self.recent_battles))[:max_visible_battles]:
+            if y_offset + 45 > panel_rect.y + panel_height - 10:
+                break
             
-            # Create new surface only when needed
-            self.battle_log_surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
-            self.last_battle_count = current_battle_count
-            
-            # Draw background
-            pygame.draw.rect(self.battle_log_surface, self.theme['bg'], 
-                           (0, 0, panel_width, panel_height))
-            
-            # Draw header
-            header = self.fonts['header'].render("Recent Battles", True, self.theme['text'])
-            self.battle_log_surface.blit(header, (padding, padding))
-            
-            # Draw only last 3 battles for better performance
-            y_offset = padding + header.get_height() + padding
-            for frame, result in self.recent_battles[-3:]:
+            entry_rect = pygame.Rect(
+                panel_rect.x + 10,
+                y_offset,
+                panel_width - 20,
+                40
+            )
+
+            # Draw entry background
+            pygame.draw.rect(screen, self.theme['highlight'], entry_rect,
+                           border_radius=4)
+
+            if result.get('outcome') in ['victory', 'draw']:
+                # Get battle participants and format names
                 if result.get('outcome') == 'victory':
-                    winner = result['winner']
-                    loser = result['loser']
-                    casualties = len(result.get('casualties', []))
-                    
-                    # Format team names to show "Robot-X" format consistently
-                    winner_name = winner if not winner.startswith('Robot') else f"Robot-{winner.split('-')[-1]}"
-                    loser_name = loser if not loser.startswith('Robot') else f"Robot-{loser.split('-')[-1]}"
-                    
-                    # Simplified battle display with better formatting
-                    text = f"{winner_name} defeated {loser_name}"
-                    battle_text = self.fonts['normal'].render(text, True, self.theme['text'])
-                    self.battle_log_surface.blit(battle_text, (padding, y_offset))
-                    
-                    # Casualties count with label
-                    cas_text = f"Casualties: {casualties}"
-                    cas_surf = self.fonts['normal'].render(cas_text, True, self.theme['warning'])
-                    self.battle_log_surface.blit(cas_surf, (padding, y_offset + 20))
-                    
-                    y_offset += 45
-                else:
-                    text = "Battle ended in a draw"
-                    battle_text = self.fonts['normal'].render(text, True, self.theme['warning'])
-                    self.battle_log_surface.blit(battle_text, (padding, y_offset))
-                    y_offset += 25
-        
-        # Position battle log below minimap with spacing
-        x = self.screen_width - panel_width - padding
-        y = self.MINIMAP_HEIGHT + (padding * 3)
-        screen.blit(self.battle_log_surface, (x, y))
+                    attacker = result['winner']
+                    defender = result['loser']
+                    att_casualties = len(result.get('attacker_casualties', []))
+                    def_casualties = len(result.get('defender_casualties', []))
+                else:  # draw
+                    attacker = result.get('team1', 'Unknown')
+                    defender = result.get('team2', 'Unknown')
+                    att_casualties = len(result.get('team1_casualties', []))
+                    def_casualties = len(result.get('team2_casualties', []))
+
+                # Skip battles with unknown participants
+                if attacker == 'Unknown' or defender == 'Unknown':
+                    continue
+
+                # Format robot names consistently
+                attacker = attacker if not attacker.startswith('Robot') else f"Robot-{attacker.split('-')[-1]}"
+                defender = defender if not defender.startswith('Robot') else f"Robot-{defender.split('-')[-1]}"
+                
+                # Draw each column
+                x = entry_rect.x + 5  # Slightly reduced initial padding
+                y = entry_rect.y + (entry_rect.height - self.fonts['small'].get_height()) // 2
+                
+                # Draw columns with proper spacing
+                for text, width in zip([attacker, defender, result['outcome'], 
+                                      str(att_casualties), str(def_casualties)], 
+                                     header_widths):
+                    text_surf = self.fonts['small'].render(text, True, self.theme['text'])
+                    screen.blit(text_surf, (x, y))
+                    x += width
+
+            y_offset += 45  # Space between entries
 
     def _draw_team_statistics(self, screen: pygame.Surface, teams: List[Any]) -> None:
         """Draw a simplified team overview."""
@@ -680,204 +700,106 @@ class UIManager:
 
     def _draw_minimap_entities(self, minimap_surf: pygame.Surface, entities: Dict[str, List[Any]], 
                              world_data: Dict[str, Any], minimap_scale: int) -> None:
-        """Draw entities (animals and robots) on the minimap."""
+        """Draw entities and territories on the minimap."""
         world_width = world_data['width'] * self.TILE_SIZE
         world_height = world_data['height'] * self.TILE_SIZE
+        scale_x = self.MINIMAP_WIDTH / world_width
+        scale_y = self.MINIMAP_HEIGHT / world_height
+
+        # Draw team territories first
+        for team in entities.get('teams', []):
+            if not team.members and not team.leader:
+                continue
+                
+            # Get all team member positions (including leader)
+            positions = []
+            if team.leader:
+                positions.append((team.leader.x, team.leader.y))
+            for member in team.members:
+                if member.health > 0:
+                    positions.append((member.x, member.y))
+            
+            if len(positions) >= 3:
+                # Calculate convex hull for territory boundary
+                hull_points = self._graham_scan(positions)
+                if hull_points:
+                    # Scale points to minimap coordinates
+                    scaled_points = [(int(x * scale_x), int(y * scale_y)) for x, y in hull_points]
+                    
+                    # Create a surface for the territory with alpha
+                    territory_surface = pygame.Surface((self.MINIMAP_WIDTH, self.MINIMAP_HEIGHT), pygame.SRCALPHA)
+                    
+                    # Draw filled territory with transparency
+                    pygame.draw.polygon(
+                        territory_surface,
+                        (*team.color, 40),  # Very transparent fill
+                        scaled_points
+                    )
+                    # Draw border with more opacity
+                    pygame.draw.polygon(
+                        territory_surface,
+                        (*team.color, 160),  # More opaque border
+                        scaled_points,
+                        2  # Border width
+                    )
+                    
+                    # Blit territory to minimap
+                    minimap_surf.blit(territory_surface, (0, 0))
 
         # Draw animals as red dots
         for animal in entities.get('animals', []):
             if animal.health > 0:
-                mini_x = int((animal.x / world_width) * (world_data['width'] * minimap_scale))
-                mini_y = int((animal.y / world_height) * (world_data['height'] * minimap_scale))
-                pygame.draw.rect(minimap_surf, (255, 0, 0), (mini_x, mini_y, 2, 2))
+                mini_x = int(animal.x * scale_x)
+                mini_y = int(animal.y * scale_y)
+                if 0 <= mini_x < self.MINIMAP_WIDTH and 0 <= mini_y < self.MINIMAP_HEIGHT:
+                    pygame.draw.circle(minimap_surf, (255, 0, 0, 200), (mini_x, mini_y), 2)
 
         # Draw robots as blue dots
         for robot in entities.get('robots', []):
-            mini_x = int((robot.x / world_width) * (world_data['width'] * minimap_scale))
-            mini_y = int((robot.y / world_height) * (world_data['height'] * minimap_scale))
-            pygame.draw.rect(minimap_surf, (0, 0, 255), (mini_x, mini_y, 3, 3))
+            mini_x = int(robot.x * scale_x)
+            mini_y = int(robot.y * scale_y)
+            if 0 <= mini_x < self.MINIMAP_WIDTH and 0 <= mini_y < self.MINIMAP_HEIGHT:
+                pygame.draw.circle(minimap_surf, (0, 0, 255, 200), (mini_x, mini_y), 3)
 
-    def _draw_camera_viewport(self, minimap_surf: pygame.Surface, camera_pos: Tuple[int, int],
-                            world_data: Dict[str, Any], minimap_scale: int) -> None:
-        """Draw the camera viewport rectangle on the minimap."""
-        camera_x, camera_y = camera_pos
-        world_width = world_data['width'] * self.TILE_SIZE
-        world_height = world_data['height'] * self.TILE_SIZE
-
-        # Calculate viewport rectangle dimensions
-        view_w_ratio = self.screen_width / world_width
-        view_h_ratio = self.screen_height / world_height
-        
-        cam_rect_w = int((world_data['width'] * minimap_scale) * view_w_ratio)
-        cam_rect_h = int((world_data['height'] * minimap_scale) * view_h_ratio)
-        
-        cam_rect_x = int((camera_x / world_width) * (world_data['width'] * minimap_scale))
-        cam_rect_y = int((camera_y / world_height) * (world_data['height'] * minimap_scale))
-
-        # Draw viewport rectangle
-        pygame.draw.rect(minimap_surf, (255, 255, 255),
-                        (cam_rect_x, cam_rect_y, cam_rect_w, cam_rect_h), 1)
-
-    def _draw_overlay_text(self, screen: pygame.Surface, text: str, 
-                         position: Tuple[int, int], with_background: bool = True) -> None:
-        """Draw text with optional semi-transparent background."""
-        text_surf = self.fonts['normal'].render(text, True, (255, 255, 255))
-        
-        if with_background:
-            bg = pygame.Surface((text_surf.get_width() + 10, text_surf.get_height() + 10))
-            bg.fill((0, 0, 0))
-            bg.set_alpha(200)
-            screen.blit(bg, (position[0] - 5, position[1] - 5))
+    def _graham_scan(self, points: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+        """Calculate convex hull of points using Graham Scan algorithm."""
+        if len(points) < 3:
+            return points
             
-        screen.blit(text_surf, position)
-
-    def _create_minimap_base(self, world_data: Dict[str, Any]) -> pygame.Surface:
-        """Create the static base minimap."""
-        surface = pygame.Surface((self.MINIMAP_WIDTH, self.MINIMAP_HEIGHT))
-        surface.fill((0, 0, 0))
+        # Find the bottommost point (and leftmost if tied)
+        bottom_point = min(points, key=lambda p: (p[1], p[0]))
         
-        cell_width = self.MINIMAP_WIDTH / world_data['width']
-        cell_height = self.MINIMAP_HEIGHT / world_data['height']
-        
-        for y, row in enumerate(world_data['layout']):
-            for x, terrain in enumerate(row):
-                color = world_data['colors'].get(terrain, (100, 100, 100))
-                rect = (
-                    int(x * cell_width), 
-                    int(y * cell_height),
-                    max(1, int(cell_width)),
-                    max(1, int(cell_height))
-                    )
-                pygame.draw.rect(surface, color, rect)
-        
-        return surface
-
-    def draw_environment_updates(self, screen: pygame.Surface, time_of_day: float, weather_conditions: Dict[str, Any], season: str) -> None:
-        """Draw environment updates on the screen."""
-        # Assuming weather_conditions is a dictionary with terrain types as keys
-        # and each value is another dictionary with 'precipitation', 'temperature', and 'wind'
-        current_terrain = 'grassland'  # Example, you might want to dynamically determine this
-        weather = weather_conditions.get(current_terrain, {'precipitation': 0, 'temperature': 20, 'wind': 0})
-        
-        weather_str = f"Precipitation: {weather['precipitation']:.2f}, Temp: {weather['temperature']:.1f}°C, Wind: {weather['wind']:.1f} km/h"
-        env_info = [
-            f"Time of Day: {time_of_day:.2f}",
-            f"Season: {season}",
-            f"Weather: {weather_str}"
-        ]
-        
-        y_offset = 10
-        for info in env_info:
-            text_surface = self.fonts['normal'].render(info, True, (255, 255, 255))
-            screen.blit(text_surface, (10, y_offset))
-            y_offset += 20
-
-    def _draw_enhanced_battle_log(self, screen: pygame.Surface) -> None:
-        """Draw battle log in a new position."""
-        if not self.recent_battles:
-            return
-            
-        panel_width = 400
-        panel_x = self.screen_width - panel_width - 20
-        panel_y = 20  # Moved to top
-        
-        stats = self._calculate_battle_stats()
-        
-        header = [
-            f"Recent Battles ({stats['total_battles']} total)",
-            f"Victories: {stats['victories']} | Draws: {stats['draws']}",
-            f"Casualties: {stats['total_casualties']}"
-        ]
-        
-        battle_details = [self._format_battle_result(frame, result) 
-                         for frame, result in self.recent_battles[-5:]]
-        
-        self._draw_panel(screen, "Battle Log", header + [""] + battle_details,
-                        (panel_x, panel_y, panel_width, 200))  # Reduced height
-
-    def _draw_event_notifications(self, screen: pygame.Surface) -> None:
-        """Draw temporary event notifications."""
-        current_time = pygame.time.get_ticks() / 1000  # Convert to seconds
-        y_offset = 50
-        
-        # Filter and sort recent events
-        active_events = [
-            (event, timestamp) for event, timestamp in self.event_log
-            if current_time - timestamp < self.event_display_time
-        ]
-        
-        for event, timestamp in active_events[-5:]:  # Show last 5 active events
-            age = current_time - timestamp
-            if age < self.event_display_time:
-                # Calculate fade alpha
-                alpha = 255
-                if age > (self.event_display_time - self.event_fade_time):
-                    fade_progress = (age - (self.event_display_time - self.event_fade_time)) / self.event_fade_time
-                    alpha = int(255 * (1 - fade_progress))
-                
-                # Draw notification
-                text_surf = self.fonts['normal'].render(event, True, (255, 255, 255))
-                text_surf.set_alpha(alpha)
-                screen.blit(text_surf, (10, y_offset))
-                y_offset += 25
-
-    def _draw_team_connections(self, screen: pygame.Surface, teams: List[Any], 
-                             camera_pos: Tuple[int, int]) -> None:
-        """Draw lines connecting team members to their leader."""
-        camera_x, camera_y = camera_pos
-        
-        # Create a surface for the connections
-        connection_surface = pygame.Surface((self.screen_width, self.screen_height), pygame.SRCALPHA)
-        
-        for team in teams:
-            if not team.members:
-                continue
-                
-            # Get screen position of leader
-            leader_screen_x = team.leader.x - camera_x
-            leader_screen_y = team.leader.y - camera_y
-            
-            # Draw leader highlight
-            pygame.draw.circle(
-                connection_surface,
-                (*team.color, 160),  # Add alpha
-                (leader_screen_x, leader_screen_y),
-                self.leader_highlight_radius
+        def sort_key(p):
+            return (
+                math.atan2(p[1] - bottom_point[1], p[0] - bottom_point[0]),
+                (p[0] - bottom_point[0]) ** 2 + (p[1] - bottom_point[1]) ** 2
             )
-            
-            # Draw lines to members
-            for member in team.members:
-                if member.health <= 0:
-                    continue
-                    
-                member_screen_x = member.x - camera_x
-                member_screen_y = member.y - camera_y
-                
-                # Draw connection line with team color
-                pygame.draw.line(
-                    connection_surface,
-                    (*team.color, self.connection_alpha),
-                    (leader_screen_x, leader_screen_y),
-                    (member_screen_x, member_screen_y),
-                    self.team_line_thickness
-                )
-                
-                # Draw formation position if available
-                if member in team.formation_positions:
-                    form_x, form_y = team.formation_positions[member]
-                    form_screen_x = form_x - camera_x
-                    form_screen_y = form_y - camera_y
-                    
-                    # Draw target position marker
-                    pygame.draw.circle(
-                        connection_surface,
-                        (*team.color, 80),  # More transparent
-                        (form_screen_x, form_screen_y),
-                        5
-                    )
         
-        # Blit the connection surface
-        screen.blit(connection_surface, (0, 0))
+        # Sort points based on polar angle and distance from bottom_point
+        sorted_points = sorted(
+            [p for p in points if p != bottom_point],
+            key=sort_key
+        )
+        
+        # Initialize hull with first three points
+        hull = [bottom_point]
+        
+        # Process remaining points
+        for point in sorted_points:
+            while len(hull) >= 2 and self._cross_product(
+                hull[-2],
+                hull[-1],
+                point
+            ) <= 0:
+                hull.pop()
+            hull.append(point)
+            
+        return hull
+        
+    def _cross_product(self, p1: Tuple[float, float], p2: Tuple[float, float], 
+                      p3: Tuple[float, float]) -> float:
+        """Calculate cross product to determine turn direction."""
+        return (p2[0] - p1[0]) * (p3[1] - p1[1]) - (p2[1] - p1[1]) * (p3[0] - p1[0])
 
     def _draw_modern_minimap(self, screen: pygame.Surface, world_data: Dict[str, Any],
                            camera_pos: Tuple[int, int], entities: Dict[str, List[Any]]) -> None:
@@ -919,15 +841,8 @@ class UIManager:
         minimap = pygame.Surface((self.MINIMAP_WIDTH, self.MINIMAP_HEIGHT), pygame.SRCALPHA)
         minimap.blit(self.minimap_surface, (0, 0))
 
-        # Draw entities
-        for animal in entities.get('animals', []):
-            if animal.health > 0:
-                color = (255, 100, 100, 200) if self.colorblind_mode else (255, 0, 0, 200)
-                self._draw_entity_dot(minimap, animal, world_data, color, 2)
-
-        for robot in entities.get('robots', []):
-            color = (100, 100, 255, 200) if self.colorblind_mode else (0, 0, 255, 200)
-            self._draw_entity_dot(minimap, robot, world_data, color, 3)
+        # Draw entities and territories
+        self._draw_minimap_entities(minimap, entities, world_data, 1)
 
         # Draw viewport rectangle with animation
         self._draw_viewport_rect(minimap, camera_pos, world_data)
@@ -1015,78 +930,6 @@ class UIManager:
             if row_rect.collidepoint(event.pos):
                 return team.leader
         return None
-
-    def _draw_modern_battle_log(self, screen: pygame.Surface) -> None:
-        """Draw a modern battle log with animations and effects"""
-        if not self.recent_battles:
-            return
-
-        # Calculate panel dimensions and position
-        panel_width = 350
-        panel_height = 200
-        panel_rect = pygame.Rect(
-            self.screen_width - panel_width - 20,
-            self.MINIMAP_HEIGHT + 80,
-            panel_width,
-            panel_height
-        )
-
-        # Draw panel background
-        self._draw_modern_panel(screen, panel_rect, "Recent Battles")
-
-        # Draw battle entries with animations
-        y_offset = 50
-        max_visible_battles = 3
-        
-        for frame, result in list(reversed(self.recent_battles))[:max_visible_battles]:
-            if y_offset + 45 > panel_height - 10:
-                break
-            
-            entry_rect = pygame.Rect(
-                panel_rect.x + 10,
-                panel_rect.y + y_offset,
-                panel_width - 20,
-                40
-            )
-
-            # Draw entry background
-            pygame.draw.rect(screen, self.theme['highlight'], entry_rect,
-                           border_radius=4)
-
-            if result.get('outcome') == 'victory':
-                winner = result['winner']
-                loser = result['loser']
-                casualties = len(result.get('casualties', []))
-
-                # Use consistent Robot-XXX format
-                winner_name = winner if not winner.startswith('Robot') else f"Robot-{winner.split('-')[-1]}"
-                loser_name = loser if not loser.startswith('Robot') else f"Robot-{loser.split('-')[-1]}"
-
-                # Draw battle text and details on the same line
-                battle_text = f"{winner_name} vs {loser_name}"
-                victory_text = "Victory"
-                cas_text = f"Casualties: {casualties}"
-                
-                # Calculate text positions for horizontal alignment
-                battle_surf = self.fonts['small'].render(battle_text, True, self.theme['text'])
-                victory_surf = self.fonts['small'].render(victory_text, True, self.theme['success'])
-                cas_surf = self.fonts['small'].render(cas_text, True, self.theme['warning'])
-                
-                # Draw all elements on the same line
-                x = entry_rect.x + 10
-                y = entry_rect.y + (entry_rect.height - battle_surf.get_height()) // 2
-                
-                screen.blit(battle_surf, (x, y))
-                x = entry_rect.right - cas_surf.get_width() - 10
-                screen.blit(cas_surf, (x, y))
-                x -= victory_surf.get_width() + 20
-                screen.blit(victory_surf, (x, y))
-            else:
-                text_surf = self.fonts['normal'].render("Battle ended in a draw",
-                                                      True, self.theme['text'])
-                screen.blit(text_surf, (entry_rect.x + 10, entry_rect.y + 12))
-
-            y_offset += 45
 
     def _draw_modern_environment(self, screen: pygame.Surface,
                                environment_data: Dict[str, Any]) -> None:
@@ -1310,5 +1153,67 @@ class UIManager:
             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
         else:
             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
+
+    def _draw_team_connections(self, surface: pygame.Surface, teams: List[Any], camera_pos: Tuple[int, int]) -> None:
+        """Draw team territories on the surface."""
+        if not self.show_team_connections:
+            return
+
+        for team in teams:
+            if not team.members:
+                continue
+
+            # Get all team member positions (including leader)
+            positions = []
+            for member in [team.leader] + team.members:
+                if member.health <= 0:
+                    continue
+                screen_x = member.x - camera_pos[0]
+                screen_y = member.y - camera_pos[1]
+                if (0 <= screen_x <= self.screen_width and 
+                    0 <= screen_y <= self.screen_height):
+                    positions.append((screen_x, screen_y))
+
+            if len(positions) >= 3:
+                # Calculate convex hull for territory boundary
+                hull_points = self._graham_scan(positions)
+                if hull_points:
+                    # Draw territory with team color
+                    pygame.draw.polygon(
+                        surface,
+                        (*team.color, 40),  # Very transparent fill
+                        hull_points
+                    )
+                    pygame.draw.lines(
+                        surface,
+                        (*team.color, 160),  # More opaque border
+                        True,  # Closed polygon
+                        hull_points,
+                        2  # Line thickness
+                    )
+
+    def _create_minimap_base(self, world_data: Dict[str, Any]) -> pygame.Surface:
+        """Create the base minimap surface with terrain."""
+        minimap = pygame.Surface((self.MINIMAP_WIDTH, self.MINIMAP_HEIGHT))
+        
+        # Calculate scaling factors
+        scale_x = self.MINIMAP_WIDTH / (world_data['width'] * self.TILE_SIZE)
+        scale_y = self.MINIMAP_HEIGHT / (world_data['height'] * self.TILE_SIZE)
+        
+        # Draw terrain
+        for y in range(world_data['height']):
+            for x in range(world_data['width']):
+                terrain = world_data['layout'][y][x]
+                color = world_data['colors'].get(terrain, (100, 100, 100))
+                
+                # Calculate minimap coordinates
+                mini_x = int(x * self.TILE_SIZE * scale_x)
+                mini_y = int(y * self.TILE_SIZE * scale_y)
+                mini_w = max(1, int(self.TILE_SIZE * scale_x))
+                mini_h = max(1, int(self.TILE_SIZE * scale_y))
+                
+                pygame.draw.rect(minimap, color, (mini_x, mini_y, mini_w, mini_h))
+        
+        return minimap
 
 

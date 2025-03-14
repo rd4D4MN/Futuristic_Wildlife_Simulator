@@ -1,10 +1,12 @@
 import random
 import math
 import pygame
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Tuple, Dict, Any, Optional, TYPE_CHECKING
 
-from src.entities.animal import Animal
 from src.entities.team import Team
+
+if TYPE_CHECKING:
+    from src.entities.animal import Animal
 
 class Robot(pygame.sprite.Sprite):
     def __init__(self, x: int, y: int):
