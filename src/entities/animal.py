@@ -7,6 +7,7 @@ from src.evolution.genome import Genome
 
 if TYPE_CHECKING:
     from src.entities.team import Team
+    from src.resources.resource_system import ResourceSystem
 
 
 class Animal(pygame.sprite.Sprite):
@@ -113,6 +114,13 @@ class Animal(pygame.sprite.Sprite):
         self.separation_distance = 20
         self.group_members = []
 
+        # Resource seeking behavior
+        self.resource_target = None
+        self.resource_target_type = None
+        self.last_resource_search = 0
+        self.resource_search_interval = 5.0  # Search every 5 seconds
+        self.health_threshold = 0.5  # Seek resources when health below 50%
+
         # Visual representation
         self.image = self._load_sprite()
         self.rect = self.image.get_rect()
@@ -149,22 +157,73 @@ class Animal(pygame.sprite.Sprite):
         except IndexError:
             return False
 
-    def update(self, dt: float, environment, world_grid, nearby_entities):
-        """Update the animal's position and behavior based on its state."""
+    def update(self, dt: float, environment, world_grid, nearby_entities, resource_system=None):
+        """Update animal behavior with improved resource handling."""
+        # Skip if dead
         if self.health <= 0:
             return
-
-        self.age += dt
-        
-        # Update current terrain and apply terrain effects
-        self._update_terrain_effects(dt, world_grid)
-
-        if self.team:
-            # Team behavior takes precedence
-            return
             
-        # Solo behavior
+        # Update terrain effects
+        self._update_terrain_effects(dt, world_grid)
+        
+        # Update movement
         self._update_movement(dt, environment, world_grid, nearby_entities)
+        
+        # Handle resource gathering if we're at a resource
+        if resource_system and hasattr(self, 'state') and self.state == "at_resource":
+            grid_x, grid_y = int(self.x // 32), int(self.y // 32)
+            resources = resource_system.get_resources_at(grid_x, grid_y)
+            
+            for resource in resources:
+                if resource['amount'] > 0:
+                    # Check if we can gather this resource
+                    can_gather = False
+                    
+                    if resource['type'] == 'food_plant' and self._can_eat_plants():
+                        can_gather = True
+                    elif resource['type'] == 'food_meat' and self._can_eat_meat():
+                        can_gather = True
+                    elif resource['type'] in ['water', 'medicinal']:
+                        can_gather = True
+                    elif hasattr(self, 'team') and self.team and resource['type'] in ['wood', 'stone', 'minerals']:
+                        can_gather = True
+                        
+                    if can_gather:
+                        # Gather the resource
+                        gather_amount = min(5, resource['amount'])
+                        actual_gathered = resource_system.gather_resource(
+                            grid_x, grid_y, resource['type'], gather_amount
+                        )
+                        
+                        if actual_gathered > 0:
+                            # If in a team, add to team inventory
+                            if hasattr(self, 'team') and self.team:
+                                if hasattr(self.team, 'inventory'):
+                                    self.team.inventory[resource['type']] += actual_gathered
+                            else:
+                                # Not in a team, use resource directly
+                                if resource['type'] == 'food_plant' and self._can_eat_plants():
+                                    self.heal(actual_gathered * 2)
+                                elif resource['type'] == 'food_meat' and self._can_eat_meat():
+                                    self.heal(actual_gathered * 2)
+                                elif resource['type'] == 'water':
+                                    self.heal(actual_gathered)
+                                elif resource['type'] == 'medicinal':
+                                    self.heal(actual_gathered * 3)
+                            
+                            # Reset resource target after successful gathering
+                            self.resource_target = None
+                            self.state = "seeking_resource"
+                            
+                            # Look for a new resource after a delay
+                            if resource_system and random.random() < 0.3:
+                                self._find_resource_target(resource_system)
+                            
+                            break
+        
+        # Find new resource targets occasionally
+        if resource_system and random.random() < 0.01:
+            self._find_resource_target(resource_system)
 
     def _update_terrain_effects(self, dt: float, world_grid):
         """Apply effects based on the current terrain with more noticeable effects."""
@@ -240,28 +299,46 @@ class Animal(pygame.sprite.Sprite):
             return 'grassland'  # Default if error
 
     def _update_movement(self, dt: float, environment, world_grid, nearby_entities) -> None:
-        """Update movement based on environment and nearby entities."""
-        # Validate inputs to prevent NaN values
-        if dt <= 0 or math.isnan(dt) or math.isnan(self.speed):
+        """Update animal movement based on state and surroundings."""
+        # Skip movement if part of a team (team will handle movement)
+        if hasattr(self, 'team') and self.team:
             return
             
-        # Random movement with persistence
-        if random.random() < 0.02:  # Change direction occasionally
+        # Calculate terrain-adjusted speed
+        terrain = self._get_current_terrain(world_grid)
+        effective_speed = self.speed * self._get_terrain_speed_modifier(terrain)
+        
+        # Check for threats first
+        threat = self._find_nearest_threat(nearby_entities)
+        if threat:
+            # Flee from threat
+            self.state = "fleeing"
+            self._flee(threat, effective_speed, dt)
+            return
+            
+        # Handle resource seeking
+        if self.state == "seeking_resource" and hasattr(self, 'resource_target'):
+            # Move towards resource
+            self._move_to_resource(dt, world_grid)
+            return
+            
+        # Default to wandering
+        self.state = "wandering"
+        self._wander(world_grid, effective_speed, dt)
+
+    def _wander(self, world_grid, effective_speed, dt):
+        """Wander around randomly with terrain-adjusted speed."""
+        # Change direction occasionally
+        if random.random() < 0.02:
             self.direction += random.uniform(-math.pi/4, math.pi/4)
             
-        # Calculate movement with terrain-adjusted speed
-        self.dx = math.cos(self.direction) * self.speed * dt
-        self.dy = math.sin(self.direction) * self.speed * dt
+        # Calculate movement
+        dx = math.cos(self.direction) * effective_speed * dt
+        dy = math.sin(self.direction) * effective_speed * dt
         
-        # Check for NaN values in movement
-        if math.isnan(self.dx) or math.isnan(self.dy):
-            self.dx = 0
-            self.dy = 0
-            return
-            
         # Apply movement if valid position
-        new_x = self.x + self.dx
-        new_y = self.y + self.dy
+        new_x = self.x + dx
+        new_y = self.y + dy
         
         if self._is_valid_position(new_x, new_y, world_grid):
             self.x = new_x
@@ -269,40 +346,59 @@ class Animal(pygame.sprite.Sprite):
         else:
             # Bounce off boundaries
             self.direction += math.pi + random.uniform(-math.pi/4, math.pi/4)
-
-    def _wander(self, world_grid, effective_speed, dt):
-        """Move randomly within valid bounds."""
-        if self.direction_timer <= 0:
-            self.direction_angle = random.random() * 2 * math.pi
-            self.direction_timer = random.uniform(1.0, 3.0)
-
-        movement_x = math.cos(self.direction_angle) * effective_speed * dt
-        movement_y = math.sin(self.direction_angle) * effective_speed * dt
-        new_x, new_y = self.x + movement_x, self.y + movement_y
-
-        if self._is_valid_position(new_x, new_y, world_grid):
-            self.x, self.y = new_x, new_y
-
-        self.direction_timer -= dt
-
-    def _flee(self, nearby_entities, effective_speed, dt):
-        """Move away from the nearest threat."""
-        threat = self._find_nearest_threat(nearby_entities)
-        if threat:
-            dx = self.x - threat.x
-            dy = self.y - threat.y
-            dist = math.sqrt(dx**2 + dy**2)
-            if dist > 0:
-                self.x += (dx / dist) * effective_speed * dt
-                self.y += (dy / dist) * effective_speed * dt
+    
+    def _flee(self, threat, effective_speed, dt):
+        """Flee from a threat with terrain-adjusted speed."""
+        # Calculate direction away from threat
+        dx = self.x - threat.x
+        dy = self.y - threat.y
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        if distance > 0:
+            # Normalize and apply speed
+            dx = dx / distance * effective_speed * dt
+            dy = dy / distance * effective_speed * dt
+            
+            # Apply movement
+            self.x += dx
+            self.y += dy
 
     #########################
     # 3. Group and Terrain Logic
     #########################
     def _find_nearest_threat(self, nearby_entities):
-        """Find the closest predator or robot."""
-        threats = [e for e in nearby_entities if e.type == "predator" or e.type == "robot"]
-        return min(threats, key=lambda t: abs(t.x - self.x) + abs(t.y - self.y), default=None)
+        """Find the nearest threat entity."""
+        threats = []
+        
+        for entity in nearby_entities:
+            # Check if entity is a robot
+            if hasattr(entity, '__class__') and entity.__class__.__name__ == 'Robot':
+                threats.append(entity)
+                continue
+                
+            # Check if entity is a predator animal
+            if (hasattr(entity, 'original_data') and 
+                entity.original_data.get('Diet_Type', '').lower() == 'carnivore' and
+                entity != self):
+                threats.append(entity)
+        
+        if not threats:
+            return None
+            
+        # Find the closest threat
+        closest = None
+        min_dist = float('inf')
+        
+        for threat in threats:
+            dx = threat.x - self.x
+            dy = threat.y - self.y
+            dist = math.sqrt(dx*dx + dy*dy)
+            
+            if dist < min_dist:
+                min_dist = dist
+                closest = threat
+                
+        return closest
 
     def can_survive_in(self, terrain_type: str) -> bool:
         """Check if the animal can survive in the given terrain."""
@@ -402,11 +498,18 @@ class Animal(pygame.sprite.Sprite):
         if math.isnan(self.x) or math.isnan(self.y):
             return
         
+        # Store camera coordinates for use in other methods
+        self.camera_x = camera_x
+        self.camera_y = camera_y
+        
         # Draw terrain effect aura
         self._draw_terrain_effect_aura(screen, camera_x, camera_y)
         
         # Draw the animal
         screen.blit(self.image, (self.x - camera_x, self.y - camera_y))
+        
+        # Draw state indicator (moved above health bar)
+        self._draw_state_indicator(screen, self.x - camera_x + 32, self.y - camera_y - 30)
             
         if show_health_bars:
             self._draw_health_bar(screen, camera_x, camera_y)
@@ -533,6 +636,94 @@ class Animal(pygame.sprite.Sprite):
         # Draw border
         pygame.draw.rect(screen, (0, 0, 0), (bar_x, bar_y, bar_width, bar_height), 1)
 
+    def _draw_state_indicator(self, screen: pygame.Surface, x: int, y: int):
+        """Draw an indicator showing the animal's current state/goal with improved visibility."""
+        # Check if animal is seeking resources
+        if hasattr(self, 'state') and self.state == "seeking_resource" and hasattr(self, 'resource_target'):
+            # Define colors for different resource types
+            resource_colors = {
+                'food_plant': (0, 200, 0),    # Green
+                'food_meat': (200, 0, 0),     # Red
+                'wood': (139, 69, 19),        # Brown
+                'stone': (128, 128, 128),     # Gray
+                'water': (0, 0, 255),         # Blue
+                'medicinal': (255, 0, 255),   # Purple
+                'minerals': (255, 215, 0),    # Gold
+                None: (255, 255, 255)         # White for any resource
+            }
+            
+            # Get color based on resource type
+            color = resource_colors.get(self.resource_target_type, (255, 255, 255))
+            
+            # Draw a background for better visibility
+            pygame.draw.circle(screen, (0, 0, 0), (x, y), 8)
+            
+            # Draw a colored circle indicating resource type
+            pygame.draw.circle(screen, color, (x, y), 6)
+            
+            # Draw a small icon based on resource type
+            if self.resource_target_type == 'food_plant':
+                # Draw a berry/fruit icon
+                pygame.draw.circle(screen, (200, 0, 0), (x, y-2), 2)  # Red berry
+                pygame.draw.circle(screen, (0, 100, 0), (x+2, y+2), 2)  # Leaf
+                pygame.draw.circle(screen, (0, 100, 0), (x-2, y+2), 2)  # Leaf
+            elif self.resource_target_type == 'food_meat':
+                # Draw a drumstick shape
+                pygame.draw.circle(screen, (150, 75, 0), (x, y), 3)  # Brown meat
+                pygame.draw.line(screen, (200, 200, 200), (x, y), (x+3, y+3), 2)  # Bone
+            elif self.resource_target_type == 'wood':
+                # Draw a log shape
+                pygame.draw.rect(screen, (101, 67, 33), (x-3, y-2, 6, 4))  # Brown log
+                pygame.draw.line(screen, (50, 25, 0), (x-3, y-2), (x+3, y-2), 1)  # Wood grain
+            elif self.resource_target_type == 'stone':
+                # Draw a rock shape
+                pygame.draw.polygon(screen, (100, 100, 100), [(x, y-3), (x+3, y), (x, y+3), (x-3, y)])
+            elif self.resource_target_type == 'water':
+                # Draw a water droplet
+                pygame.draw.circle(screen, (0, 0, 200), (x, y), 3)  # Blue droplet
+                pygame.draw.polygon(screen, (0, 0, 200), [(x, y-5), (x+3, y-1), (x-3, y-1)])
+            elif self.resource_target_type == 'medicinal':
+                # Draw a medical cross
+                pygame.draw.rect(screen, (255, 255, 255), (x-3, y-1, 6, 2))
+                pygame.draw.rect(screen, (255, 255, 255), (x-1, y-3, 2, 6))
+            elif self.resource_target_type == 'minerals':
+                # Draw a gold nugget
+                pygame.draw.circle(screen, (255, 215, 0), (x, y), 3)  # Gold center
+                pygame.draw.circle(screen, (255, 255, 200), (x-1, y-1), 1)  # Highlight
+            
+            # Draw a line to target if it exists
+            if self.resource_target and hasattr(self, 'camera_x') and hasattr(self, 'camera_y'):
+                target_x, target_y = self.resource_target
+                target_screen_x = (target_x * 32) + 16 - self.camera_x  # Center of tile
+                target_screen_y = (target_y * 32) + 16 - self.camera_y
+                
+                # Draw a dotted line to target
+                for i in range(0, 100, 5):  # Draw dots every 5 pixels
+                    t = i / 100.0
+                    dot_x = x + (target_screen_x - x) * t
+                    dot_y = y + (target_screen_y - y) * t
+                    pygame.draw.circle(screen, color, (int(dot_x), int(dot_y)), 1)
+        
+        # Show team strategy if animal is a team leader
+        if hasattr(self, 'team') and self.team and hasattr(self.team, 'leader') and self.team.leader == self:
+            if hasattr(self.team, 'resource_strategy'):
+                # Define colors for different strategies
+                strategy_colors = {
+                    'survival': (255, 0, 0),       # Red
+                    'establish_base': (0, 0, 255), # Blue
+                    'gather_food': (0, 255, 0),    # Green
+                    'defense': (255, 165, 0),      # Orange
+                    'expand': (255, 0, 255),       # Purple
+                    'balanced': (255, 255, 255)    # White
+                }
+                
+                # Get color based on strategy
+                color = strategy_colors.get(self.team.resource_strategy, (255, 255, 255))
+                
+                # Draw strategy indicator above the resource indicator
+                pygame.draw.circle(screen, (0, 0, 0), (x, y-12), 6)  # Black background
+                pygame.draw.circle(screen, color, (x, y-12), 4)  # Colored circle
+
     def cleanup(self):
         """Clean up resources associated with the animal."""
         if hasattr(self, 'image'):
@@ -655,10 +846,159 @@ class Animal(pygame.sprite.Sprite):
         self.health = max(0, min(self.max_health, self.health - amount))
         
     def heal(self, amount: float) -> None:
-        """Heal with safety checks."""
-        if not isinstance(amount, (int, float)) or math.isnan(amount):
+        """Heal the animal by the specified amount."""
+        if amount <= 0 or self.health <= 0:
             return
             
-        self.health = max(0, min(self.max_health, self.health + amount))
+        self.health = min(self.health + amount, self.max_health)
+
+    def _find_resource_target(self, resource_system: 'ResourceSystem'):
+        """Find a suitable resource target with improved effectiveness."""
+        # Skip if already seeking a resource
+        if hasattr(self, 'resource_target') and self.resource_target and hasattr(self, 'resource_target_type'):
+            # Check if we should keep the current target
+            if random.random() < 0.8:  # 80% chance to keep current target
+                return
         
+        # Determine what type of resource to look for based on needs
+        target_type = None
+        search_radius = 1200.0  # Increased search radius
+        
+        # Check health to determine if medicinal resources are needed
+        health_percent = self.health / self.max_health
+        
+        # Check if animal is in a team
+        in_team = hasattr(self, 'team') and self.team is not None
+        
+        # Prioritize resources based on needs
+        if health_percent < 0.5:
+            # Low health - look for medicinal resources
+            target_type = 'medicinal'
+        elif self._can_eat_plants() and (not in_team or random.random() < 0.7):
+            # Herbivore or omnivore - look for plant food
+            target_type = 'food_plant'
+        elif self._can_eat_meat() and (not in_team or random.random() < 0.7):
+            # Carnivore or omnivore - look for meat
+            target_type = 'food_meat'
+        elif random.random() < 0.3:
+            # Sometimes look for water
+            target_type = 'water'
+        elif in_team and random.random() < 0.5:
+            # If in a team, sometimes look for building materials
+            target_type = random.choice(['wood', 'stone', 'minerals'])
+        
+        # Find nearest resource of target type with increased chance of success
+        nearest_pos, distance = resource_system.find_nearest_resource(
+            self.x, self.y, target_type, search_radius
+        )
+        
+        if nearest_pos:
+            # Set as target
+            self.resource_target = nearest_pos
+            self.resource_target_type = target_type
+            self.state = "seeking_resource"
+            return
+        
+        # If no specific resource found, look for any resource
+        if random.random() < 0.5:  # 50% chance to look for any resource
+            nearest_pos, distance = resource_system.find_nearest_resource(
+                self.x, self.y, None, search_radius
+            )
+            
+            if nearest_pos:
+                self.resource_target = nearest_pos
+                self.resource_target_type = None
+                self.state = "seeking_resource"
+
+    def _move_to_resource(self, dt: float, world_grid):
+        """Move towards a resource target with proper proximity checks."""
+        if not hasattr(self, 'resource_target') or not self.resource_target:
+            return
+            
+        # Calculate target position in world coordinates
+        target_x, target_y = self.resource_target
+        target_world_x = (target_x * 32) + 16  # Center of tile
+        target_world_y = (target_y * 32) + 16
+        
+        # Calculate direction to target
+        dx = target_world_x - self.x
+        dy = target_world_y - self.y
+        distance = math.sqrt(dx*dx + dy*dy)
+        
+        # Check if we've reached the resource
+        grid_x, grid_y = int(self.x // 32), int(self.y // 32)
+        if grid_x == target_x and grid_y == target_y:
+            # We've reached the resource, mark as arrived
+            self.state = "at_resource"
+            return
+            
+        # Continue moving towards the resource
+        if distance > 5:
+            # Calculate normalized direction
+            dx /= distance
+            dy /= distance
+            
+            # Calculate new position
+            new_x = self.x + dx * self.speed * dt
+            new_y = self.y + dy * self.speed * dt
+            
+            # Check if new position is valid
+            if self._is_valid_position(new_x, new_y, world_grid):
+                self.x = new_x
+                self.y = new_y
+            else:
+                # Try to move in just x direction
+                if self._is_valid_position(new_x, self.y, world_grid):
+                    self.x = new_x
+                # Try to move in just y direction
+                elif self._is_valid_position(self.x, new_y, world_grid):
+                    self.y = new_y
+                else:
+                    # Can't move directly towards target, try a random direction
+                    self._wander(world_grid, self.speed, dt)
+    
+    def _can_eat_plants(self):
+        """Check if the animal can eat plant-based food."""
+        diet = self.original_data.get('Diet_Type', '').lower()
+        return diet in ['herbivore', 'omnivore']
+        
+    def _can_eat_meat(self):
+        """Check if the animal can eat meat-based food."""
+        diet = self.original_data.get('Diet_Type', '').lower()
+        return diet in ['carnivore', 'omnivore']
+
+    def _get_terrain_speed_modifier(self, terrain: str) -> float:
+        """Calculate speed modifier based on terrain and animal's adaptations."""
+        # Default speed modifier
+        modifier = 1.0
+        
+        # Apply terrain speed effect if available
+        if hasattr(self, 'terrain_speed_effect'):
+            modifier = self.terrain_speed_effect
+            
+        # Apply terrain-specific modifiers based on animal's adaptations
+        if hasattr(self, 'original_data'):
+            habitat = self.original_data.get('Habitat', '').lower()
+            
+            # Boost speed in preferred habitat
+            if 'aquatic' in habitat and terrain == 'water':
+                modifier *= 1.5
+            elif 'forest' in habitat and terrain == 'forest':
+                modifier *= 1.3
+            elif 'grassland' in habitat and terrain == 'grassland':
+                modifier *= 1.3
+            elif 'mountain' in habitat and terrain == 'mountain':
+                modifier *= 1.3
+            elif 'desert' in habitat and terrain == 'desert':
+                modifier *= 1.3
+                
+            # Reduce speed in challenging terrains
+            if 'aquatic' not in habitat and terrain == 'water':
+                modifier *= 0.5
+            elif 'mountain' not in habitat and terrain == 'mountain':
+                modifier *= 0.7
+            elif 'desert' not in habitat and terrain == 'desert':
+                modifier *= 0.8
+                
+        return max(0.2, min(modifier, 2.0))  # Clamp between 0.2 and 2.0
 

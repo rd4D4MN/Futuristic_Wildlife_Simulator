@@ -779,7 +779,8 @@ class GameState:
         # Always update robots for responsiveness
         for robot in self.robots:
             robot.detect_nearby_animals(self.animals)
-            robot.update(dt, self.robots)
+            # Pass resource_system to robot update method
+            robot.update(dt, self.robots, self.resource_system)
             self._constrain_to_world(robot)
             if not robot.team or len(robot.team.members) == 0:
                 robot.state = 'recruiting' if robot.nearby_animals else 'searching'
@@ -799,7 +800,8 @@ class GameState:
             # Update animals and handle breeding
             for i, animal1 in enumerate(self.animals):
                 if animal1.health > 0:
-                    animal1.update(dt, self.environment_system, self.world_grid, self.animals + self.robots)
+                    # Pass resource_system to animal update method
+                    animal1.update(dt, self.environment_system, self.world_grid, self.animals + self.robots, self.resource_system)
                     self._constrain_to_world(animal1)
                     
                     # Check for breeding opportunities (less frequently)

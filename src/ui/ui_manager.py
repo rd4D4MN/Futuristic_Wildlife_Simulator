@@ -177,7 +177,7 @@ class UIManager:
     def _init_team_overview(self) -> None:
         """Initialize team overview configuration with responsive sizing"""
         # Make team panel size proportional to screen size
-        self.team_panel_width = int(self.screen_width * 0.25)  # 25% of screen width
+        self.team_panel_width = int(self.screen_width * 0.30)  # Increased from 25% to 30% of screen width
         self.team_panel_height = int(self.screen_height * 0.4)  # 40% of screen height
         self.team_panel_rect = pygame.Rect(20, 20, self.team_panel_width, self.team_panel_height)
         self.team_padding = 15
@@ -701,7 +701,7 @@ class UIManager:
         y = self.team_padding + header_height
         
         for header in headers:
-            text = self.fonts['small_bold'].render(header, True, self.theme['text_secondary'])
+            text = self.fonts['small'].render(header, True, self.theme['text_secondary'])
             panel.blit(text, (x, y))
             x += panel_width // len(headers)
         
@@ -736,15 +736,15 @@ class UIManager:
                 resource_y = y + 15
                 resource_x = self.team_padding
                 
-                # Define resource icons
-                resource_icons = {
-                    'food_plant': '🍎',
-                    'food_meat': '🍖',
-                    'wood': '🌲',
-                    'stone': '🗿',
-                    'water': '💧',
-                    'medicinal': '💊',
-                    'minerals': '💎'
+                # Define resource text and colors with more intuitive labels - same as in _draw_modern_team_overview
+                resource_info = {
+                    'food_plant': ('PLANT', (100, 255, 100)),  # Green for plant food
+                    'food_meat': ('MEAT', (255, 100, 100)),    # Red for meat
+                    'wood': ('WOOD', (139, 69, 19)),           # Brown for wood
+                    'stone': ('STONE', (128, 128, 128)),       # Gray for stone
+                    'water': ('WATER', (0, 100, 255)),         # Blue for water
+                    'medicinal': ('MEDS', (255, 0, 255)),      # Purple for medicinal
+                    'minerals': ('GEMS', (255, 215, 0))        # Gold for minerals
                 }
                 
                 # Draw up to 4 most important resources
@@ -753,15 +753,16 @@ class UIManager:
                     if res_type in team.inventory:
                         amount = team.inventory[res_type]
                         if amount > 0:
-                            # Draw icon and amount
-                            icon_text = self.fonts['small'].render(resource_icons.get(res_type, '?'), True, self.theme['text'])
-                            panel.blit(icon_text, (resource_x, resource_y))
+                            # Draw resource abbreviation
+                            abbr, color = resource_info[res_type]
+                            abbr_text = self.fonts['small'].render(abbr, True, color)
+                            panel.blit(abbr_text, (resource_x, resource_y))
                             
-                            amount_text = self.fonts['tiny'].render(f"{int(amount)}", True, self.theme['text_secondary'])
+                            amount_text = self.fonts['small'].render(str(int(amount)), True, self.theme['text'])
                             panel.blit(amount_text, (resource_x + 20, resource_y + 2))
                             
-                            resource_x += 50
-                            if resource_x > panel_width - 50:
+                            resource_x += 60  # Increased spacing for better readability
+                            if resource_x > panel_width - 60:
                                 break
         
         # Draw panel on screen
@@ -880,7 +881,11 @@ class UIManager:
     def _cross_product(self, p1: Tuple[float, float], p2: Tuple[float, float], 
                       p3: Tuple[float, float]) -> float:
         """Calculate cross product to determine turn direction."""
-        return (p2[0] - p1[0]) * (p3[1] - p1[1]) - (p2[1] - p1[1]) * (p3[0] - p1[0])
+        dx1 = p2[0] - p1[0]
+        dy1 = p2[1] - p1[1]
+        dx2 = p3[0] - p1[0]
+        dy2 = p3[1] - p1[1]
+        return dx1 * dy2 - dy1 * dx2
 
     def _draw_modern_minimap(self, screen: pygame.Surface, world_data: Dict[str, Any],
                            camera_pos: Tuple[int, int], entities: Dict[str, List[Any]]) -> None:
@@ -947,15 +952,37 @@ class UIManager:
         # Sort teams by size (high to low)
         sorted_teams = sorted(teams, key=lambda t: len(t.members), reverse=True)
 
-        # Calculate panel dimensions
-        panel_width = self.team_panel_width
+        # Calculate the exact width needed based on the number of resources
+        base_width = 340  # Width for Robot, Size, Formation, Status columns
+        resource_spacing = 50  # Spacing for resource columns
+        num_resources = len(resource_info) if 'resource_info' in locals() else 7  # Default to 7 resources
+        resources_width = num_resources * resource_spacing
+        
+        # Calculate panel dimensions with precise width
+        panel_width = base_width + resources_width
         panel_height = min(len(sorted_teams), self.max_visible_teams) * self.team_row_height + 50  # Reduced from 80 to 50 to remove title space
+        
+        # Ensure the panel doesn't extend too far to the right
+        max_width = self.screen_width // 2 - 50  # Leave space for environment box
+        panel_width = min(panel_width, max_width)
+        
         panel_rect = pygame.Rect(10, 10, panel_width, panel_height)
         self.team_panel_rect = panel_rect  # Store for click detection
 
         # Draw panel background with transparent black
         transparent_black = (0, 0, 0, 160)  # Transparent black
         self._draw_rounded_rect(screen, panel_rect, transparent_black, self.corner_radius)
+
+        # Define resource text and colors with more intuitive labels
+        resource_info = {
+            'food_plant': ('PLANT', (100, 255, 100)),  # Green for plant food
+            'food_meat': ('MEAT', (255, 100, 100)),    # Red for meat
+            'wood': ('WOOD', (139, 69, 19)),           # Brown for wood
+            'stone': ('STONE', (128, 128, 128)),       # Gray for stone
+            'water': ('WATER', (0, 100, 255)),         # Blue for water
+            'medicinal': ('MEDS', (255, 0, 255)),      # Purple for medicinal
+            'minerals': ('GEMS', (255, 215, 0))        # Gold for minerals
+        }
 
         # Column headers with fixed positions and widths
         header_y = panel_rect.y + 15  # Reduced from 40 to 15 to account for removed title
@@ -966,8 +993,28 @@ class UIManager:
             ("Status", 300, 40)
         ]
         
-        for header, x_pos, width in headers:
-            header_surf = self.fonts['small'].render(header, True, self.theme['text_secondary'])
+        # Add all resources to headers with adjusted spacing to fit panel width
+        resource_x = 350
+        available_width = panel_width - resource_x - 10  # Available width for resources
+        resource_spacing = min(50, available_width / len(resource_info))  # Adjust spacing if needed
+        
+        for i, (resource, (abbr, color)) in enumerate(resource_info.items()):
+            # Only add resource if it fits within the panel
+            if resource_x + (i * resource_spacing) < panel_width - 20:
+                headers.append((abbr, resource_x + (i * resource_spacing), 30))
+        
+        # Draw headers - use the same font for all headers for consistency
+        for i, (header, x_pos, width) in enumerate(headers):
+            # Use resource color for resource headers but keep font consistent
+            if i >= 4:  # Resource headers start at index 4
+                resource_index = i - 4
+                resource_key = list(resource_info.keys())[resource_index]
+                header_color = resource_info[resource_key][1]
+            else:
+                header_color = self.theme['text_secondary']
+            
+            # Use the same font for all headers
+            header_surf = self.fonts['small'].render(header, True, header_color)
             screen.blit(header_surf, (panel_rect.x + x_pos, header_y))
 
         # Store team positions for click handling
@@ -1008,6 +1055,19 @@ class UIManager:
             status_color = self.theme['success'] if team.is_active() else self.theme['warning']
             pygame.draw.circle(screen, status_color,
                              (panel_rect.x + headers[3][1], y + self.team_row_height//2), 4)
+            
+            # Draw resource counts under the corresponding resource headers
+            if hasattr(team, 'inventory'):
+                for j, (resource, (abbr, color)) in enumerate(resource_info.items()):
+                    # Only draw resources that have headers (fit within panel)
+                    resource_header_index = 4 + j  # 4 is the index where resource headers start
+                    if resource_header_index < len(headers):
+                        amount = team.inventory.get(resource, 0)
+                        resource_x = panel_rect.x + headers[resource_header_index][1]
+                        # Draw resource amount with the same font as other columns
+                        count_text = str(int(amount)) if amount > 0 else "-"
+                        count_surf = self.fonts['normal'].render(count_text, True, color)
+                        screen.blit(count_surf, (resource_x, y + 2))
 
             y += self.team_row_height
 

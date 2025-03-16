@@ -10,13 +10,13 @@ class ResourceSystem:
         self.world_grid = world_grid
         self.resources = {}  # Map of position to resource
         self.resource_types = {
-            'food_plant': {'terrain': ['grassland', 'forest'], 'regrowth_rate': 0.01, 'color': (0, 255, 0)},
-            'food_meat': {'terrain': ['grassland'], 'regrowth_rate': 0.005, 'color': (255, 0, 0)},
-            'wood': {'terrain': ['forest'], 'regrowth_rate': 0.008, 'color': (139, 69, 19)},
-            'stone': {'terrain': ['mountain'], 'regrowth_rate': 0.003, 'color': (128, 128, 128)},
-            'water': {'terrain': ['aquatic', 'wetland'], 'regrowth_rate': 0.02, 'color': (0, 0, 255)},
-            'medicinal': {'terrain': ['forest', 'wetland'], 'regrowth_rate': 0.004, 'color': (255, 0, 255)},
-            'minerals': {'terrain': ['mountain'], 'regrowth_rate': 0.001, 'color': (255, 215, 0)}
+            'food_plant': {'terrain': ['grassland', 'forest'], 'regrowth_rate': 0.02, 'color': (0, 255, 0)},
+            'food_meat': {'terrain': ['grassland'], 'regrowth_rate': 0.01, 'color': (255, 0, 0)},
+            'wood': {'terrain': ['forest'], 'regrowth_rate': 0.015, 'color': (139, 69, 19)},
+            'stone': {'terrain': ['mountain'], 'regrowth_rate': 0.008, 'color': (128, 128, 128)},
+            'water': {'terrain': ['aquatic', 'wetland'], 'regrowth_rate': 0.03, 'color': (0, 0, 255)},
+            'medicinal': {'terrain': ['forest', 'wetland'], 'regrowth_rate': 0.01, 'color': (255, 0, 255)},
+            'minerals': {'terrain': ['mountain'], 'regrowth_rate': 0.005, 'color': (255, 215, 0)}
         }
         
         # Initialize emoji font for rendering
@@ -48,7 +48,7 @@ class ResourceSystem:
     def _initialize_resources(self):
         """Generate initial resources based on terrain with even distribution across the map."""
         # Set a maximum limit for resources
-        MAX_RESOURCES = 800  # Reduced from 1000 to improve performance
+        MAX_RESOURCES = 1200  # Increased from 800 to provide more resources
         
         # Divide the map into regions for more even distribution
         world_height = len(self.world_grid)
@@ -98,15 +98,15 @@ class ResourceSystem:
                     if region_resource_count >= resources_per_region:
                         break
                         
-                    # Only add resource with 25% probability to avoid overcrowding
-                    if random.random() < 0.25:
+                    # Increased probability to 40% to ensure more resources
+                    if random.random() < 0.4:
                         resource_type = random.choice(possible_resources)
                         pos = (x, y)
                         if pos not in self.resources:
                             self.resources[pos] = []
                         self.resources[pos].append({
                             'type': resource_type,
-                            'amount': random.randint(10, 100),
+                            'amount': random.randint(30, 100),  # Increased minimum amount
                             'max_amount': 100,
                             'last_update': time.time()
                         })
@@ -133,16 +133,16 @@ class ResourceSystem:
             for resource in resources:
                 if resource['amount'] < resource['max_amount']:
                     regrowth_rate = self.resource_types[resource['type']]['regrowth_rate']
-                    resource['amount'] += regrowth_rate * time_diff * 10  # Scale for game balance
+                    resource['amount'] += regrowth_rate * time_diff * 15  # Increased scaling factor
                     resource['amount'] = min(resource['amount'], resource['max_amount'])
                 resource['last_update'] = current_time
         
         # Count current resources
         current_resource_count = sum(len(resources) for resources in self.resources.values())
-        MAX_RESOURCES = 800  # Same as in _initialize_resources
+        MAX_RESOURCES = 1200  # Same as in _initialize_resources
         
-        # Only add new resources if we're below the limit and rarely (once every ~10 seconds on average)
-        if current_resource_count < MAX_RESOURCES and random.random() < 0.001 * dt:
+        # Increased chance of new resources spawning
+        if current_resource_count < MAX_RESOURCES and random.random() < 0.003 * dt:
             # Find a random region to add resources to
             world_height = len(self.world_grid)
             world_width = len(self.world_grid[0])
@@ -161,7 +161,7 @@ class ResourceSystem:
             end_y = min(start_y + region_height, world_height)
             
             # Try to add a resource in this region
-            for _ in range(5):  # Try up to 5 times
+            for _ in range(10):  # Increased attempts from 5 to 10
                 x = random.randint(start_x, end_x - 1)
                 y = random.randint(start_y, end_y - 1)
                 terrain = self.world_grid[y][x].lower()
@@ -179,7 +179,7 @@ class ResourceSystem:
                     if not any(r['type'] == resource_type for r in self.resources[pos]):
                         self.resources[pos].append({
                             'type': resource_type,
-                            'amount': random.randint(10, 50),
+                            'amount': random.randint(30, 80),  # Increased minimum amount
                             'max_amount': 100,
                             'last_update': current_time
                         })
