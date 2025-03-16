@@ -155,15 +155,16 @@ class GameState:
         return overlays
 
     def _update_weather_particles(self, dt: float) -> None:
-        """Update weather particles based on environment conditions."""
+        """Update weather particles based on environment conditions with horizontal wrapping only."""
         # Clear old particles
         self.particles = [p for p in self.particles if p['lifetime'] > 0]
         
-        # Get current terrain at center of screen
-        center_x = int((self.camera_x + self.screen_width // 2) // self.TILE_SIZE)
+        # Get current terrain at center of screen with horizontal wrapping
+        center_x = int((self.camera_x + self.screen_width // 2) // self.TILE_SIZE) % WORLD_WIDTH
         center_y = int((self.camera_y + self.screen_height // 2) // self.TILE_SIZE)
         
-        if 0 <= center_x < WORLD_WIDTH and 0 <= center_y < WORLD_HEIGHT:
+        # Check if within vertical bounds
+        if 0 <= center_y < WORLD_HEIGHT:
             current_terrain = self.world_grid[center_y][center_x]
             weather = self.environment_system.weather_conditions.get(current_terrain, {})
             
@@ -230,7 +231,8 @@ class GameState:
                     'x': random.randint(0, self.screen_width),
                     'y': random.randint(-10, 0),
                     'speed': random.uniform(200, 300),
-                    'lifetime': random.uniform(0.5, 1.0)
+                    'lifetime': random.uniform(0.5, 1.0),
+                    'weather': weather  # Store weather reference for this particle
                 })
             
             # Snow particles
@@ -240,7 +242,8 @@ class GameState:
                     'x': random.randint(0, self.screen_width),
                     'y': random.randint(-10, 0),
                     'speed': random.uniform(50, 100),
-                    'lifetime': random.uniform(1.0, 2.0)
+                    'lifetime': random.uniform(1.0, 2.0),
+                    'weather': weather  # Store weather reference for this particle
                 })
             
             # Heat particles
@@ -250,7 +253,8 @@ class GameState:
                     'x': random.randint(0, self.screen_width),
                     'y': random.randint(self.screen_height - 50, self.screen_height),
                     'speed': random.uniform(-50, -30),
-                    'lifetime': random.uniform(0.5, 1.0)
+                    'lifetime': random.uniform(0.5, 1.0),
+                    'weather': weather  # Store weather reference for this particle
                 })
             
             # Wind particles
@@ -260,19 +264,26 @@ class GameState:
                     'x': random.randint(0, self.screen_width),
                     'y': random.randint(0, self.screen_height),
                     'speed': random.uniform(100, 200),
-                    'lifetime': random.uniform(0.3, 0.8)
+                    'lifetime': random.uniform(0.3, 0.8),
+                    'weather': weather  # Store weather reference for this particle
                 })
+        else:
+            # Default weather if out of bounds
+            weather = {'precipitation': 0, 'temperature': 20, 'wind': 0}
         
         # Update particle positions with more realistic physics
         for particle in self.particles:
+            # Get weather data from the particle itself
+            particle_weather = particle.get('weather', {})
+            
             if particle['type'] == 'rain':
                 # Rain falls straight down, slightly affected by wind
-                wind_effect = weather.get('wind', 0) * 0.1
+                wind_effect = particle_weather.get('wind', 0) * 0.1
                 particle['y'] += particle['speed'] * dt
                 particle['x'] -= wind_effect * dt
             elif particle['type'] == 'snow':
                 # Snow falls more slowly and drifts with sine wave pattern
-                wind_effect = weather.get('wind', 0) * 0.2
+                wind_effect = particle_weather.get('wind', 0) * 0.2
                 particle['y'] += particle['speed'] * dt
                 particle['x'] += math.sin(particle['y'] / 30) * 2 - wind_effect * dt
             elif particle['type'] == 'heat':
@@ -284,6 +295,12 @@ class GameState:
                 particle['x'] += particle['speed'] * dt
                 particle['y'] += math.sin(particle['x'] / 50) * 2
             
+            # Apply horizontal wrapping to particles
+            if particle['x'] < 0:
+                particle['x'] += self.screen_width
+            elif particle['x'] >= self.screen_width:
+                particle['x'] -= self.screen_width
+                
             # Reduce lifetime
             particle['lifetime'] -= dt
 
@@ -775,12 +792,19 @@ class GameState:
         self.frame_count += 1
 
     def _constrain_to_world(self, entity) -> None:
-        """Keep an entity within world bounds."""
-        max_x = self.width - 64  # Account for entity size
-        max_y = self.height - 64
+        """Wrap entity horizontally but constrain vertically to create a cylindrical world."""
+        # Get world dimensions
+        world_width_px = self.width
+        world_height_px = self.height
         
-        entity.x = max(32, min(entity.x, max_x))
-        entity.y = max(32, min(entity.y, max_y))
+        # Wrap around horizontally (left/right)
+        if entity.x < 0:
+            entity.x += world_width_px
+        elif entity.x >= world_width_px:
+            entity.x -= world_width_px
+            
+        # Constrain vertically (top/bottom)
+        entity.y = max(32, min(entity.y, world_height_px - 64))
 
     def _handle_reproduction(self, parent1: 'Animal', parent2: 'Animal') -> None:
         """Handle reproduction between two animals."""
@@ -967,31 +991,42 @@ class GameState:
         pygame.display.flip()
 
     def _draw_world(self) -> None:
-        """Draw the visible part of the world grid."""
-        start_x = max(0, int(self.camera_x // TILE_SIZE))
-        end_x = min(WORLD_WIDTH, int((self.camera_x + self.screen_width) // TILE_SIZE + 1))
-        start_y = max(0, int(self.camera_y // TILE_SIZE))
-        end_y = min(WORLD_HEIGHT, int((self.camera_y + self.screen_height) // TILE_SIZE + 1))
-
-        for y in range(start_y, end_y):
-            for x in range(start_x, end_x):
+        """Draw the visible part of the world grid with horizontal wrapping only."""
+        # Calculate visible tile range
+        start_x_raw = int(self.camera_x // TILE_SIZE)
+        end_x_raw = int((self.camera_x + self.screen_width) // TILE_SIZE + 1)
+        start_y_raw = max(0, int(self.camera_y // TILE_SIZE))
+        end_y_raw = min(WORLD_HEIGHT, int((self.camera_y + self.screen_height) // TILE_SIZE + 1))
+        
+        # Get world dimensions in tiles
+        world_width_tiles = WORLD_WIDTH
+        
+        # Draw tiles in the visible range, wrapping horizontally but not vertically
+        for y in range(start_y_raw, end_y_raw):
+            for x_offset in range(start_x_raw, end_x_raw):
+                # Apply horizontal wrapping
+                x = x_offset % world_width_tiles
+                
+                # Get tile and color
                 tile = self.world_grid[y][x]
                 color = self.world_data['colors'].get(tile, (100, 100, 100))
-                rect = pygame.Rect(
-                    int(x * TILE_SIZE - self.camera_x),
-                    int(y * TILE_SIZE - self.camera_y),
-                    TILE_SIZE,
-                    TILE_SIZE
-                )
+                
+                # Calculate screen position, accounting for wrapping
+                screen_x = int(x_offset * TILE_SIZE - self.camera_x)
+                screen_y = int(y * TILE_SIZE - self.camera_y)
+                
+                # Draw the tile
+                rect = pygame.Rect(screen_x, screen_y, TILE_SIZE, TILE_SIZE)
                 pygame.draw.rect(self.screen, color, rect)
 
     def _draw_weather_effects(self) -> None:
-        """Draw weather effects based on environment conditions."""
-        # Get current terrain at center of screen
-        center_x = int((self.camera_x + self.screen_width // 2) // self.TILE_SIZE)
+        """Draw weather effects based on environment conditions with horizontal wrapping only."""
+        # Get current terrain at center of screen with horizontal wrapping
+        center_x = int((self.camera_x + self.screen_width // 2) // self.TILE_SIZE) % WORLD_WIDTH
         center_y = int((self.camera_y + self.screen_height // 2) // self.TILE_SIZE)
         
-        if 0 <= center_x < WORLD_WIDTH and 0 <= center_y < WORLD_HEIGHT:
+        # Check if within vertical bounds
+        if 0 <= center_y < WORLD_HEIGHT:
             current_terrain = self.world_grid[center_y][center_x]
             weather = self.environment_system.weather_conditions.get(current_terrain, {})
             
@@ -1071,50 +1106,50 @@ class GameState:
                 night_overlay.set_alpha(alpha)
                 self.screen.blit(night_overlay, (0, 0))
         
-        # Draw particles with improved effects
-        for particle in self.particles:
-            if particle['type'] == 'rain':
-                # Rain drops - longer when heavier precipitation
-                rain_length = 10 + int(weather.get('precipitation', 0) * 10)
-                pygame.draw.line(
-                    self.screen,
-                    (100, 100, 255),
-                    (particle['x'], particle['y']),
-                    (particle['x'] - 1, particle['y'] + rain_length),
-                    2
-                )
-            elif particle['type'] == 'snow':
-                # Snow flakes - larger in winter
-                snow_size = 2
-                if self.environment_system.season == 'Winter':
-                    snow_size = 3
-                pygame.draw.circle(
-                    self.screen,
-                    (255, 255, 255),
-                    (int(particle['x']), int(particle['y'])),
-                    snow_size
-                )
-            elif particle['type'] == 'heat':
-                # Heat waves - more intense in summer
-                heat_size = 3
-                if self.environment_system.season == 'Summer':
-                    heat_size = 4
-                pygame.draw.circle(
-                    self.screen,
-                    (255, 200, 100),
-                    (int(particle['x']), int(particle['y'])),
-                    heat_size
-                )
-            elif particle['type'] == 'wind':
-                # Wind streaks - longer with stronger wind
-                wind_length = 15 + int(weather.get('wind', 0) / 2)
-                pygame.draw.line(
-                    self.screen,
-                    (200, 200, 200),
-                    (particle['x'], particle['y']),
-                    (particle['x'] - wind_length, particle['y']),
-                    1
-                )
+            # Draw particles with improved effects
+            for particle in self.particles:
+                if particle['type'] == 'rain':
+                    # Rain drops - longer when heavier precipitation
+                    rain_length = 10 + int(weather.get('precipitation', 0) * 10)
+                    pygame.draw.line(
+                        self.screen,
+                        (100, 100, 255),
+                        (particle['x'], particle['y']),
+                        (particle['x'] - 1, particle['y'] + rain_length),
+                        2
+                    )
+                elif particle['type'] == 'snow':
+                    # Snow flakes - larger in winter
+                    snow_size = 2
+                    if self.environment_system.season == 'Winter':
+                        snow_size = 3
+                    pygame.draw.circle(
+                        self.screen,
+                        (255, 255, 255),
+                        (int(particle['x']), int(particle['y'])),
+                        snow_size
+                    )
+                elif particle['type'] == 'heat':
+                    # Heat waves - more intense in summer
+                    heat_size = 3
+                    if self.environment_system.season == 'Summer':
+                        heat_size = 4
+                    pygame.draw.circle(
+                        self.screen,
+                        (255, 200, 100),
+                        (int(particle['x']), int(particle['y'])),
+                        heat_size
+                    )
+                elif particle['type'] == 'wind':
+                    # Wind streaks - longer with stronger wind
+                    wind_length = 15 + int(weather.get('wind', 0) / 2)
+                    pygame.draw.line(
+                        self.screen,
+                        (200, 200, 200),
+                        (particle['x'], particle['y']),
+                        (particle['x'] - wind_length, particle['y']),
+                        1
+                    )
 
     def _draw_entities(self) -> None:
         """Draw all entities."""
@@ -1194,7 +1229,10 @@ class GameState:
             )
 
     def _handle_camera_movement(self) -> None:
-        """Handle camera movement with smooth transitions."""
+        """Handle camera movement with horizontal wrapping but vertical constraints."""
+        world_width_px = self.width
+        world_height_px = self.height
+        
         if self.spectating and 0 <= self.spectated_robot_index < len(self.robots):
             # Follow the spectated robot with smooth camera
             robot = self.robots[self.spectated_robot_index]
@@ -1204,6 +1242,11 @@ class GameState:
             # Smooth camera movement with easing
             self.camera_x += (target_x - self.camera_x) * 0.1
             self.camera_y += (target_y - self.camera_y) * 0.1
+            
+            # Apply horizontal wrapping to camera position
+            self.camera_x = self.camera_x % world_width_px
+            # Constrain vertically
+            self.camera_y = max(0, min(self.camera_y, world_height_px - self.screen_height))
         else:
             # Handle manual camera movement
             keys = pygame.key.get_pressed()
@@ -1220,22 +1263,28 @@ class GameState:
                 if keys[pygame.K_DOWN]:
                     move_y += self.camera_speed
                     
-                # Apply smooth movement
+                # Apply movement with horizontal wrapping and vertical constraints
                 if move_x != 0 or move_y != 0:
-                    self.camera_x = max(0, min(self.width - self.screen_width,
-                                             self.camera_x + move_x))
-                    self.camera_y = max(0, min(self.height - self.screen_height,
-                                             self.camera_y + move_y))
+                    self.camera_x = (self.camera_x + move_x) % world_width_px
+                    self.camera_y = max(0, min(self.camera_y + move_y, world_height_px - self.screen_height))
 
     def _get_current_terrain(self) -> str:
-        """Get the terrain type at the center of the viewport."""
-        center_x = int((self.camera_x + self.screen_width/2) // self.TILE_SIZE)
+        """Get the terrain type at the center of the viewport with horizontal wrapping only."""
+        # Get world dimensions
+        world_width_tiles = WORLD_WIDTH
+        world_height_tiles = WORLD_HEIGHT
+        
+        # Calculate center position with horizontal wrapping only
+        center_x = int((self.camera_x + self.screen_width/2) // self.TILE_SIZE) % world_width_tiles
         center_y = int((self.camera_y + self.screen_height/2) // self.TILE_SIZE)
         
         try:
-            return self.world_grid[center_y][center_x]
+            # Check if within vertical bounds
+            if 0 <= center_y < world_height_tiles:
+                return self.world_grid[center_y][center_x]
+            return 'grassland'  # Default if out of vertical bounds
         except IndexError:
-            return 'grassland'  # Default terrain
+            return 'grassland'  # Default if out of bounds
 
     def cleanup(self) -> None:
         """Clean up resources when game ends."""

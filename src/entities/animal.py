@@ -123,21 +123,24 @@ class Animal(pygame.sprite.Sprite):
     #########################
     
     def _is_valid_position(self, new_x: float, new_y: float, world_grid) -> bool:
-        """Check if new position is valid based on terrain and bounds."""
+        """Check if new position is valid based on terrain. Allows wrapping horizontally but not vertically."""
         # Check for NaN values first to prevent errors
         if math.isnan(new_x) or math.isnan(new_y):
             return False
             
-        # Convert to grid coordinates
-        grid_x = int(new_x // 32)  # Updated from 8 to 32
-        grid_y = int(new_y // 32)  # Updated from 8 to 32
+        # Get world dimensions
+        world_width = len(world_grid[0])
+        world_height = len(world_grid)
         
-        # Check world boundaries with a safety margin
+        # Apply horizontal wrapping
+        grid_x = int(new_x // 32) % world_width
+        
+        # Check vertical bounds with a safety margin
+        grid_y = int(new_y // 32)
         margin = 1  # One tile margin
-        if not (margin <= grid_x < len(world_grid[0]) - margin and 
-                margin <= grid_y < len(world_grid) - margin):
+        if not (margin <= grid_y < world_height - margin):
             return False
-            
+        
         # Check terrain - allow movement into any terrain, but with consequences
         try:
             # We'll still check the terrain type, but we won't restrict movement
@@ -215,18 +218,24 @@ class Animal(pygame.sprite.Sprite):
             self.speed = 30.0  # Default speed
 
     def _get_current_terrain(self, world_grid) -> str:
-        """Get the terrain type at the animal's current position."""
+        """Get the current terrain type at the animal's position with horizontal wrapping."""
         try:
             # Check for NaN values first to prevent errors
             if math.isnan(self.x) or math.isnan(self.y):
                 return 'grassland'  # Default if coordinates are invalid
                 
-            grid_x = int(self.x // 32)  # Updated from 8 to 32
-            grid_y = int(self.y // 32)  # Updated from 8 to 32
+            # Get world dimensions
+            world_width = len(world_grid[0])
+            world_height = len(world_grid)
             
-            if 0 <= grid_x < len(world_grid[0]) and 0 <= grid_y < len(world_grid):
+            # Calculate grid position with horizontal wrapping only
+            grid_x = int(self.x // 32) % world_width
+            grid_y = int(self.y // 32)
+            
+            # Check if within vertical bounds
+            if 0 <= grid_y < world_height:
                 return world_grid[grid_y][grid_x]
-            return 'grassland'  # Default if out of bounds
+            return 'grassland'  # Default if out of vertical bounds
         except (IndexError, TypeError):
             return 'grassland'  # Default if error
 

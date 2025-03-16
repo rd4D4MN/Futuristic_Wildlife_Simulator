@@ -467,29 +467,55 @@ class UIManager:
             # Create working copy
             minimap = self.minimap_surface.copy()
             
-            # Draw entities with correct scaling
+            # Draw entities with horizontal wrapping only
             for animal in entities.get('animals', []):
                 if animal.health > 0:
-                    mini_x = int(animal.x * scale_x)
+                    # Apply horizontal wrapping only
+                    mini_x = int((animal.x % world_pixel_width) * scale_x)
                     mini_y = int(animal.y * scale_y)
-                    if 0 <= mini_x < self.MINIMAP_WIDTH and 0 <= mini_y < self.MINIMAP_HEIGHT:
+                    # Only draw if within vertical bounds
+                    if 0 <= mini_y < self.MINIMAP_HEIGHT:
                         pygame.draw.circle(minimap, (255, 0, 0), (mini_x, mini_y), 2)
 
             for robot in entities.get('robots', []):
-                mini_x = int(robot.x * scale_x)
+                # Apply horizontal wrapping only
+                mini_x = int((robot.x % world_pixel_width) * scale_x)
                 mini_y = int(robot.y * scale_y)
-                if 0 <= mini_x < self.MINIMAP_WIDTH and 0 <= mini_y < self.MINIMAP_HEIGHT:
+                # Only draw if within vertical bounds
+                if 0 <= mini_y < self.MINIMAP_HEIGHT:
                     pygame.draw.circle(minimap, (0, 0, 255), (mini_x, mini_y), 3)
 
-            # Draw viewport rectangle
-            viewport_x = int(camera_pos[0] * scale_x)
-            viewport_y = int(camera_pos[1] * scale_y)
+            # Draw viewport rectangle with horizontal wrapping only
+            # Get camera position with horizontal wrapping only
+            camera_x = camera_pos[0] % world_pixel_width
+            camera_y = camera_pos[1]  # No vertical wrapping
+            
+            # Calculate viewport rectangle in minimap coordinates
+            viewport_x = int(camera_x * scale_x)
+            viewport_y = int(camera_y * scale_y)
             viewport_w = int(self.screen_width * scale_x)
             viewport_h = int(self.screen_height * scale_y)
-
-            # Draw viewport rectangle
-            pygame.draw.rect(minimap, (255, 255, 255), 
-                           (viewport_x, viewport_y, viewport_w, viewport_h), 1)
+            
+            # Draw the viewport rectangle, handling horizontal wrapping only
+            if viewport_x + viewport_w > self.MINIMAP_WIDTH:
+                # Viewport crosses horizontal world boundary
+                
+                # Main rectangle
+                pygame.draw.rect(minimap, (255, 255, 255), 
+                               (viewport_x, viewport_y, 
+                                min(viewport_w, self.MINIMAP_WIDTH - viewport_x),
+                                viewport_h), 1)
+                
+                # Handle horizontal wrapping
+                wrap_width = (viewport_x + viewport_w) - self.MINIMAP_WIDTH
+                pygame.draw.rect(minimap, (255, 255, 255),
+                               (0, viewport_y,
+                                wrap_width,
+                                viewport_h), 1)
+            else:
+                # Viewport doesn't cross horizontal world boundary
+                pygame.draw.rect(minimap, (255, 255, 255), 
+                               (viewport_x, viewport_y, viewport_w, viewport_h), 1)
 
             # Draw complete minimap with border
             border_rect = pygame.Rect(
@@ -806,7 +832,7 @@ class UIManager:
             return (
                 math.atan2(p[1] - bottom_point[1], p[0] - bottom_point[0]),
                 (p[0] - bottom_point[0]) ** 2 + (p[1] - bottom_point[1]) ** 2
-        )
+            )
         
         # Sort points based on polar angle and distance from bottom_point
         sorted_points = sorted(
@@ -1409,7 +1435,7 @@ class UIManager:
                     )
 
     def _create_minimap_base(self, world_data: Dict[str, Any]) -> pygame.Surface:
-        """Create the base minimap surface with terrain."""
+        """Create the base minimap surface with terrain for a cylindrical world."""
         minimap = pygame.Surface((self.MINIMAP_WIDTH, self.MINIMAP_HEIGHT))
         
         # Calculate scaling factors
@@ -1430,6 +1456,18 @@ class UIManager:
                 
                 pygame.draw.rect(minimap, color, (mini_x, mini_y, mini_w, mini_h))
         
+        # Draw horizontal lines to indicate the world is cylindrical (wraps horizontally)
+        # Top and bottom borders are solid to indicate boundaries
+        pygame.draw.line(minimap, (255, 255, 255), (0, 0), (self.MINIMAP_WIDTH, 0), 2)
+        pygame.draw.line(minimap, (255, 255, 255), (0, self.MINIMAP_HEIGHT-1), (self.MINIMAP_WIDTH, self.MINIMAP_HEIGHT-1), 2)
+        
+        # Left and right borders are dashed to indicate wrapping
+        dash_length = 5
+        for y in range(0, self.MINIMAP_HEIGHT, dash_length*2):
+            if y + dash_length < self.MINIMAP_HEIGHT:
+                pygame.draw.line(minimap, (255, 255, 255), (0, y), (0, y + dash_length), 1)
+                pygame.draw.line(minimap, (255, 255, 255), (self.MINIMAP_WIDTH-1, y), (self.MINIMAP_WIDTH-1, y + dash_length), 1)
+        
         return minimap
 
     def _draw_modern_status_bar(self, screen: pygame.Surface,
@@ -1442,7 +1480,7 @@ class UIManager:
         bg = pygame.Surface((self.screen_width, bar_height), pygame.SRCALPHA)
         bg.fill((*self.theme['bg'][:3], 230))
         screen.blit(bg, (0, y))
-
+        
         # Draw stats with icons
         x = 20
         for stat, value in stats.items():
