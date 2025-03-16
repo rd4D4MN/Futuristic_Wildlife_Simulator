@@ -1002,8 +1002,8 @@ class UIManager:
     def _draw_modern_environment(self, screen: pygame.Surface,
                                environment_data: Dict[str, Any]) -> None:
         """Draw modern environment information panel with custom-drawn icons at the top middle of the screen"""
-        # Calculate panel dimensions - now at top middle
-        panel_width = 680  # Increased width to accommodate wider parameter sections
+        # Calculate panel dimensions - now at top middle with reduced width since we're removing parameters
+        panel_width = 400  # Reduced width since we're removing season and terrain parameters
         panel_height = 90  # Increased height for date display
         panel_rect = pygame.Rect(
             (self.screen_width - panel_width) // 2,  # Center horizontally
@@ -1019,81 +1019,58 @@ class UIManager:
         
         # Extract environment data
         time_of_day = environment_data.get('time_of_day', 0)
-        season = environment_data.get('season', 'Spring')
-        current_terrain = environment_data.get('current_terrain', 'grassland')
         weather_conditions = environment_data.get('weather_conditions', {})
+        current_terrain = environment_data.get('current_terrain', 'grassland')
+        current_longitude = environment_data.get('current_longitude', 0)
         
         # Get time data if available in the new format
         time_data = environment_data.get('time_data', {})
         formatted_time = time_data.get('formatted_time', self._format_time(time_of_day))
         formatted_date = time_data.get('formatted_date', '')
         
-        # Get weather for current terrain
+        # Get terrain-specific weather
         terrain_weather = weather_conditions.get(current_terrain, {
-            'temperature': 20,
-            'precipitation': 0,
-            'wind': 0
+            'temperature': 20.0,
+            'precipitation': 0.0,
+            'wind': 0.0
         })
         
-        # Calculate parameter dimensions
-        icon_size = 24
-        param_width = panel_width // 6  # 6 parameters
-        
-        # Position parameters with more space
-        start_x = panel_rect.x + 10
-        icon_y = panel_rect.y + (panel_height - icon_size) // 2 - 5  # Moved up to make room for date
-        label_y = panel_rect.y + 6  # Moved up further to create more space
-        
-        # Draw date at the top
+        # Draw date in the center top
         if formatted_date:
-            date_surf = self.fonts['normal'].render(formatted_date, True, self.theme['text_secondary'])
-            date_x = panel_rect.x + (panel_width // 2) - (date_surf.get_width() // 2)
-            screen.blit(date_surf, (date_x, panel_rect.y + panel_height - 25))
+            date_text = self.fonts['normal'].render(formatted_date, True, self.theme['text_secondary'])
+            date_x = panel_rect.x + (panel_width - date_text.get_width()) // 2
+            screen.blit(date_text, (date_x, panel_rect.y + 5))
+        
+        # Define function to draw each parameter with icon
+        def draw_param(x, y, param_type, label, value, color=None):
+            # Draw icon
+            self._draw_custom_icon(screen, param_type, x + 5, y, 24)
+            
+            # Draw label
+            label_text = self.fonts['small'].render(label, True, self.theme['text_secondary'])
+            screen.blit(label_text, (x + 35, y))
+            
+            # Draw value with optional custom color
+            value_color = color if color else self.theme['text']
+            value_text = self.fonts['normal'].render(str(value), True, value_color)
+            screen.blit(value_text, (x + 35, y + 20))
+        
+        # Calculate layout with even spacing
+        icon_y = panel_rect.y + 30
+        
+        # Calculate exact parameter width to ensure even spacing
+        usable_width = panel_width - 40  # Total width minus left and right margins
+        param_width = usable_width // 4  # Divide evenly for 4 parameters
+        
+        # Calculate starting positions for each parameter to ensure even spacing
+        positions = []
+        for i in range(4):
+            x_pos = panel_rect.x + 20 + (i * param_width)
+            positions.append(x_pos)
 
-        # Function to draw a parameter with custom icon, label and value
-        def draw_param(x, y, param_type, label, value, color=self.theme['text']):
-            # Draw label above with more separation
-            label_surf = self.fonts['small'].render(label, True, self.theme['text_secondary'])
-            label_x = x + (param_width // 2) - (label_surf.get_width() // 2)
-            screen.blit(label_surf, (label_x, label_y))
-            
-            # Format value to ensure it's a string
-            value_str = str(value)
-            
-            # Draw value with fixed width
-            value_surf = self.fonts['normal'].render(value_str, True, color)
-            
-            if param_type in ["season", "terrain"]:
-                # For season and terrain, use color indicators instead of icons
-                if param_type == "season":
-                    indicator_color = self._get_season_color(season)
-                else:  # terrain
-                    indicator_color = self._get_terrain_color(current_terrain)
-                
-                # Draw colored circle indicator
-                indicator_radius = icon_size // 2
-                circle_x = x + indicator_radius
-                pygame.draw.circle(screen, indicator_color, (circle_x, y + indicator_radius), indicator_radius)
-                pygame.draw.circle(screen, self.theme['text'], (circle_x, y + indicator_radius), indicator_radius, 1)
-                
-                # Position value right after the indicator with fixed spacing - aligned with other values
-                value_x = x + icon_size + 10  # Increased spacing between icon and value
-                screen.blit(value_surf, (value_x, y + (icon_size - value_surf.get_height()) // 2))
-            else:
-                # Draw custom icon
-                self._draw_custom_icon(screen, param_type, x, y, icon_size)
-                
-                # Position value right after the icon with fixed spacing
-                value_x = x + icon_size + 10  # Increased spacing between icon and value
-                screen.blit(value_surf, (value_x, y + (icon_size - value_surf.get_height()) // 2))
-            
-            return param_width
-
-        # Draw each parameter with fixed width
+        # Draw each parameter with fixed width and even spacing
         params = [
             ("time", "TIME", formatted_time),
-            ("season", "SEASON", season),
-            ("terrain", "TERRAIN", current_terrain.title()),
             ("temp", "TEMP", f"{terrain_weather['temperature']:.1f}°C", self._get_temp_color(terrain_weather['temperature'])),
             ("rain", "RAIN", f"{terrain_weather['precipitation']:.2f}"),
             ("wind", "WIND", f"{terrain_weather['wind']:.1f}")
@@ -1102,10 +1079,10 @@ class UIManager:
         for i, param in enumerate(params):
             if len(param) == 4:  # With custom color
                 param_type, label, value, color = param
-                draw_param(start_x + (i * param_width), icon_y, param_type, label, value, color)
+                draw_param(positions[i], icon_y, param_type, label, value, color)
             else:
                 param_type, label, value = param
-                draw_param(start_x + (i * param_width), icon_y, param_type, label, value)
+                draw_param(positions[i], icon_y, param_type, label, value)
 
     def _draw_custom_icon(self, surface: pygame.Surface, icon_type: str, x: int, y: int, size: int) -> None:
         """Draw a custom geometric icon instead of text characters"""

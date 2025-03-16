@@ -964,17 +964,22 @@ class GameState:
         self._draw_entities()
         self.combat_manager.draw(self.screen, self.camera_x, self.camera_y)
         
-        # Get environment data with terrain-specific weather
+        # Get current terrain and longitude
+        current_terrain, current_longitude = self._get_current_terrain()
+        
+        # Get environment data with terrain-specific weather and local time
         environment_data = {
             'time_of_day': self.environment_system.time_of_day,
             'weather_conditions': self.environment_system.weather_conditions,  # Now includes all terrain weather
             'season': self.environment_system.season,
-            'current_terrain': self._get_current_terrain(),  # Add current terrain info
-            'time_data': self.environment_system.get_time_data()  # Add new time data
+            'current_terrain': current_terrain,  # Add current terrain info
+            'time_data': self.environment_system.get_time_data(current_longitude),  # Add local time data
+            'current_longitude': current_longitude,  # Add current longitude for UI
+            'world_width': WORLD_WIDTH  # Add world width for meridian calculation
         }
         
         # Store current time for UI clock animation
-        self.ui_manager.current_time_of_day = self.environment_system.time_of_day
+        self.ui_manager.current_time_of_day = self.environment_system.get_local_time(current_longitude)
         
         # Draw UI with all new features
         self.ui_manager.draw(
@@ -1268,8 +1273,11 @@ class GameState:
                     self.camera_x = (self.camera_x + move_x) % world_width_px
                     self.camera_y = max(0, min(self.camera_y + move_y, world_height_px - self.screen_height))
 
-    def _get_current_terrain(self) -> str:
-        """Get the terrain type at the center of the viewport with horizontal wrapping only."""
+    def _get_current_terrain(self) -> tuple:
+        """
+        Get the terrain type and longitude at the center of the viewport with horizontal wrapping only.
+        Returns a tuple of (terrain_type, longitude)
+        """
         # Get world dimensions
         world_width_tiles = WORLD_WIDTH
         world_height_tiles = WORLD_HEIGHT
@@ -1281,10 +1289,10 @@ class GameState:
         try:
             # Check if within vertical bounds
             if 0 <= center_y < world_height_tiles:
-                return self.world_grid[center_y][center_x]
-            return 'grassland'  # Default if out of vertical bounds
+                return self.world_grid[center_y][center_x], center_x
+            return 'grassland', center_x  # Default if out of vertical bounds
         except IndexError:
-            return 'grassland'  # Default if out of bounds
+            return 'grassland', center_x  # Default if out of bounds
 
     def cleanup(self) -> None:
         """Clean up resources when game ends."""

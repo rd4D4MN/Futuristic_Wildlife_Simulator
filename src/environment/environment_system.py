@@ -15,6 +15,10 @@ class EnvironmentSystem:
         self.days_per_month = 30
         self.months_per_year = 12
         
+        # Time zone configuration
+        self.time_zones = 24  # 24 time zones across the world
+        self.reference_longitude = 0  # Prime meridian (reference point for time)
+        
         # Weather and seasons
         self.weather_conditions = {}  # Updated periodically
         self.season = self._get_season_from_month(self.month)  # Initial season based on month
@@ -245,10 +249,50 @@ class EnvironmentSystem:
 
         return modified_effects
         
-    def get_formatted_time(self) -> str:
-        """Return a formatted time string (HH:MM)."""
-        hours = int(self.time_of_day)
-        minutes = int((self.time_of_day % 1) * 60)
+    def get_local_time(self, longitude: int) -> float:
+        """
+        Calculate local time based on longitude (x-coordinate).
+        
+        Args:
+            longitude: The x-coordinate in the world grid (0 to WORLD_WIDTH-1)
+            
+        Returns:
+            Local time of day (0.0 to 24.0)
+        """
+        # Calculate time zone offset (how many hours from prime meridian)
+        # Map longitude to -12 to +12 hours range
+        from src.map.map_generator import WORLD_WIDTH
+        
+        # Calculate the offset in hours
+        # Each time zone is WORLD_WIDTH / time_zones tiles wide
+        zone_width = WORLD_WIDTH / self.time_zones
+        
+        # Calculate which time zone this longitude is in
+        time_zone = int(longitude / zone_width)
+        
+        # Calculate hours offset from reference meridian (0)
+        # Map from 0-23 to -12 to +12 range
+        if time_zone > self.time_zones / 2:
+            hours_offset = time_zone - self.time_zones
+        else:
+            hours_offset = time_zone
+            
+        # Apply offset to base time
+        local_time = (self.time_of_day + hours_offset) % 24.0
+        
+        return local_time
+    
+    def get_formatted_time(self, longitude: int = None) -> str:
+        """Return a formatted time string (HH:MM) for the given longitude."""
+        if longitude is not None:
+            # Get local time for the specified longitude
+            time_to_format = self.get_local_time(longitude)
+        else:
+            # Use global time if no longitude specified
+            time_to_format = self.time_of_day
+            
+        hours = int(time_to_format)
+        minutes = int((time_to_format % 1) * 60)
         return f"{hours:02d}:{minutes:02d}"
     
     def get_formatted_date(self) -> str:
@@ -256,11 +300,18 @@ class EnvironmentSystem:
         month_name = self.month_names[self.month - 1]
         return f"{month_name} {self.day}, Year {self.year}"
     
-    def get_time_data(self) -> Dict[str, Any]:
-        """Get complete time and calendar data."""
+    def get_time_data(self, longitude: int = None) -> Dict[str, Any]:
+        """Get complete time and calendar data for the given longitude."""
+        if longitude is not None:
+            local_time = self.get_local_time(longitude)
+            formatted_time = self.get_formatted_time(longitude)
+        else:
+            local_time = self.time_of_day
+            formatted_time = self.get_formatted_time()
+            
         return {
-            'time_of_day': self.time_of_day,
-            'formatted_time': self.get_formatted_time(),
+            'time_of_day': local_time,
+            'formatted_time': formatted_time,
             'day': self.day,
             'month': self.month,
             'month_name': self.month_names[self.month - 1],
