@@ -2,6 +2,7 @@ from typing import List, Tuple, Union, Optional, TYPE_CHECKING
 import pygame
 import random
 import math
+from src.entities.team_base import TeamBase
 
 if TYPE_CHECKING:
     from src.entities.animal import Animal
@@ -14,23 +15,27 @@ class Team:
         self.leader = leader
         self.members: List['Animal'] = []
         
-        # Timing and cooldowns first
-        self.battle_cooldown = 180
-        self.last_battle_frame = -self.battle_cooldown
-        self.search_timer = 0
-        self.search_interval = 5
-        self.last_cohesion_check = 0
-        self.cohesion_check_interval = 0.5  # More frequent checks
-        self.last_debug_time = 0
-        self.debug_interval = 5.0
-        
-        # Team appearance and formation
+        # Team appearance and formation first (needed by base)
         self.color = (
             random.randint(50, 255),
             random.randint(50, 255),
             random.randint(50, 255)
         )
         self.formation = random.choice(['aggressive', 'defensive', 'scout'])
+        
+        # Base attributes
+        self.base = TeamBase(self, (leader.x, leader.y))
+        self.base_established = True
+        
+        # Timing and cooldowns
+        self.battle_cooldown = 180
+        self.last_battle_frame = -self.battle_cooldown
+        self.search_timer = 0
+        self.search_interval = 5
+        self.last_cohesion_check = 0
+        self.cohesion_check_interval = 0.5
+        self.last_debug_time = 0
+        self.debug_interval = 5.0
         
         # Combat and stats
         self.team_level = 1
@@ -40,33 +45,33 @@ class Team:
         self.aggression = random.uniform(0.8, 2.0)
         
         # Movement and positioning
-        self.max_distance_from_leader = 300  # Reduced from 400
-        self.base_formation_radius = 50  # Base radius for formation
-        self.max_formation_radius = 200  # Maximum formation radius
+        self.max_distance_from_leader = 300
+        self.base_formation_radius = 50
+        self.max_formation_radius = 200
         self.formation_positions = {}
         self.patrol_points = []
         self.current_patrol_index = 0
         self.target_x, self.target_y = self.leader.x, self.leader.y
         
         # Territory attributes
-        self.territory_radius = 800  # Increased from 400 to 800
-        self.min_territory_radius = 800  # Minimum territory radius
+        self.territory_radius = 800
+        self.min_territory_radius = 800
         self.territory_center = (leader.x, leader.y)
-        self.territory_expansion_rate = 1.2  # Territory expands by 20% when spread
+        self.territory_expansion_rate = 1.2
         self.last_territory_update = 0
-        self.territory_update_interval = 1.0  # Update more frequently
+        self.territory_update_interval = 1.0
         
         # Team state
         self.disbanding = False
         self.disband_timer = 0
         self.max_disband_time = 10.0
-        self.max_spread = 400  # Reduced back to 400
+        self.max_spread = 400
         
         # Debug and tracking
         self.debug_logs = []
         self.movement_history = []
         self.max_history = 10
-        self.cohesion_violations = 0  # Track consecutive cohesion violations
+        self.cohesion_violations = 0
 
     def get_total_health(self) -> float:
         """Calculate total health of team including leader and active members."""
@@ -155,14 +160,21 @@ class Team:
             self.members.remove(animal)
 
     def update(self, dt: float) -> None:
-        """Update team behavior with enhanced debugging."""
-        # Update territory center periodically
+        """Update team behavior with base management."""
+        # Update base first
+        is_night = self._is_night_time()
+        self.base.update(dt, is_night)
+        
+        # Check if night time and enforce return to base
+        if is_night and self.base_established:
+            self._return_to_base()
+        
+        # Rest of the update logic
         self.last_territory_update += dt
         if self.last_territory_update >= self.territory_update_interval:
             self.last_territory_update = 0
             self._update_territory_center()
 
-        # Check cohesion periodically
         self.last_cohesion_check += dt
         if self.last_cohesion_check >= self.cohesion_check_interval:
             self.last_cohesion_check = 0
@@ -174,10 +186,8 @@ class Team:
                     self.disbanding = False
                     self.disband_timer = 0
 
-        # Handle disbanding with grace period
         if self.disbanding:
             self.disband_timer += dt
-            
             if self.disband_timer >= self.max_disband_time:
                 if self._check_team_cohesion():
                     self.disbanding = False
@@ -186,13 +196,10 @@ class Team:
                     self._disband_team()
                     return
 
-        # Update positions
         self._update_formation_positions()
 
-        # Move members toward their formation positions
         if self.members:
             base_speed = min(member.speed for member in self.members)
-            
             for member in self.members:
                 if member in self.formation_positions:
                     target_x, target_y = self.formation_positions[member]
@@ -200,25 +207,91 @@ class Team:
                     dy = target_y - member.y
                     dist = math.sqrt(dx*dx + dy*dy)
                     
-                    if dist > 5:  # Only move if not at position
-                        speed_mult = min(2.0, dist / 50)  # Faster catch-up when far
+                    if dist > 5:
+                        speed_mult = min(2.0, dist / 50)
                         move_speed = base_speed * speed_mult * dt
-                        
-                        # Calculate movement with collision avoidance
                         move_x = (dx/dist) * move_speed
                         move_y = (dy/dist) * move_speed
-                        
-                        # Apply movement if valid
                         new_x = member.x + move_x
                         new_y = member.y + move_y
-                        
                         if member._is_valid_position(new_x, new_y, member.world_grid):
                             member.x = new_x
                             member.y = new_y
 
-        # Level up check
         if self.experience >= self.team_level * 100:
             self._level_up()
+
+    def _is_night_time(self) -> bool:
+        """Check if it's night time based on environment system."""
+        if hasattr(self.leader, 'world_grid') and hasattr(self.leader.world_grid, 'environment_system'):
+            time_of_day = self.leader.world_grid.environment_system.time_of_day
+            return time_of_day < 6 or time_of_day > 18
+        return False
+
+    def _return_to_base(self) -> None:
+        """Direct all team members to return to base during night."""
+        if not self.base_established:
+            return
+            
+        # Update leader's target to base center
+        if isinstance(self.leader, Robot):
+            self.leader.target_x = self.base.position[0]
+            self.leader.target_y = self.base.position[1]
+            
+        # Update formation positions to be within base
+        for member in self.members:
+            angle = random.random() * 2 * math.pi
+            distance = random.random() * (self.base.radius * 0.8)  # Stay within 80% of base radius
+            target_x = self.base.position[0] + math.cos(angle) * distance
+            target_y = self.base.position[1] + math.sin(angle) * distance
+            self.formation_positions[member] = (target_x, target_y)
+
+    def handle_intruder(self, intruder: Union['Animal', 'Robot']) -> bool:
+        """Handle an intruder in the team's base."""
+        if not self.base_established:
+            return False
+            
+        # Check if intruder is in base
+        if not self.base.is_point_inside((intruder.x, intruder.y)):
+            return False
+            
+        # Calculate defense bonus
+        defense_bonus = self.base.get_defense_bonus()
+        
+        # Increase aggression temporarily
+        old_aggression = self.aggression
+        self.aggression *= defense_bonus
+        
+        # Set all members to attack intruder
+        for member in self.members:
+            if hasattr(member, 'target'):
+                member.target = intruder
+                
+        # Reset aggression after delay
+        self.aggression = old_aggression
+        
+        return True
+
+    def draw(self, screen: pygame.Surface, camera_x: float, camera_y: float) -> None:
+        """Draw team and base."""
+        # Draw base first
+        if self.base_established:
+            self.base.draw(screen, camera_x, camera_y)
+            
+        # Draw territory and other team visuals
+        if len(self.members) > 0:
+            # Draw lines between members
+            for i, member in enumerate(self.members[:-1]):
+                next_member = self.members[i + 1]
+                start_pos = (int(member.x - camera_x), int(member.y - camera_y))
+                end_pos = (int(next_member.x - camera_x), int(next_member.y - camera_y))
+                pygame.draw.line(screen, self.color, start_pos, end_pos, 1)
+                
+            # Draw line to leader
+            if self.members:
+                start_pos = (int(self.leader.x - camera_x), int(self.leader.y - camera_y))
+                end_pos = (int(self.members[0].x - camera_x), int(self.members[0].y - camera_y))
+                pygame.draw.line(screen, self.color, start_pos, end_pos, 1)
 
     def _apply_team_bonuses(self) -> None:
         """Apply team-based bonuses to all members."""

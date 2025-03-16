@@ -686,7 +686,7 @@ class GameState:
 
     def _handle_battles(self) -> None:
         """Handle battles between nearby teams and territory conflicts."""
-        battle_range = 600.0  # Increased from 400
+        battle_range = 600.0
         min_team_size = 2
 
         # Track engaged teams to prevent multiple battles per frame
@@ -711,6 +711,22 @@ class GameState:
                 dy = team2_pos[1] - team1_pos[1]
                 dist = math.sqrt(dx**2 + dy**2)
 
+                # Check for base invasion
+                base_invasion = False
+                if team1.base_established:
+                    for member in team2.members + [team2.leader]:
+                        if team1.base.is_point_inside((member.x, member.y)):
+                            team1.handle_intruder(member)
+                            base_invasion = True
+                            break
+                            
+                if team2.base_established:
+                    for member in team1.members + [team1.leader]:
+                        if team2.base.is_point_inside((member.x, member.y)):
+                            team2.handle_intruder(member)
+                            base_invasion = True
+                            break
+
                 # Check for territory conflict
                 territory_conflict = False
                 for member in team1.members:
@@ -723,13 +739,14 @@ class GameState:
                             territory_conflict = True
                             break
 
-                # Higher chance of battle when closer or in territory conflict
-                base_chance = 0.2  # Increased from 0.1
+                # Higher chance of battle when closer, in territory conflict, or base invasion
+                base_chance = 0.2
                 proximity_bonus = max(0, (battle_range - dist) / battle_range)
                 territory_bonus = 0.4 if territory_conflict else 0.0
-                battle_chance = base_chance + (proximity_bonus * 0.3) + territory_bonus
+                base_invasion_bonus = 0.6 if base_invasion else 0.0
+                battle_chance = base_chance + (proximity_bonus * 0.3) + territory_bonus + base_invasion_bonus
 
-                if ((dist < battle_range or territory_conflict) and 
+                if ((dist < battle_range or territory_conflict or base_invasion) and 
                     team1.get_total_health() > 0 and 
                     team2.get_total_health() > 0 and
                     random.random() < battle_chance):
@@ -740,46 +757,46 @@ class GameState:
                         engaged_teams.add(team1)
                         engaged_teams.add(team2)
                         
-                        # Add territory context to battle result
+                        # Add territory and base context to battle result
+                        battle_result['result']['context'] = []
                         if territory_conflict:
-                            battle_result['result']['context'] = 'territory_conflict'
+                            battle_result['result']['context'].append('territory_conflict')
+                        if base_invasion:
+                            battle_result['result']['context'].append('base_invasion')
                         
                         self.event_manager.add_event('battle', battle_result)
-                        
-                        # Use the new add_battle method instead of directly appending
                         self.ui_manager.add_battle(self.frame_count, battle_result['result'])
                         
                         winner = team1 if battle_result['result'].get('winner') == team1.get_leader_name() else team2
-                        winner.experience += 50 + (25 if territory_conflict else 0)  # Extra XP for territory defense
+                        winner.experience += 50
+                        if territory_conflict:
+                            winner.experience += 25
+                        if base_invasion:
+                            winner.experience += 50  # Extra XP for successful base defense/invasion
 
     def update(self, dt: float) -> None:
-        """Update game state with performance optimizations."""
+        """Update game state with base management."""
         self.event_manager.frame_count = self.frame_count
         
-        # Update systems that need to run every frame
+        # Update systems
         self.environment_system.update(dt)
         self.combat_manager.update(dt)
-        
-        # Only update resource system every frame (it has its own internal throttling)
         self.resource_system.update(dt)
         
-        # Update weather particles (visual only, can be throttled)
-        if self.frame_count % 2 == 0:  # Only update every other frame
+        # Update weather particles
+        if self.frame_count % 2 == 0:
             self._update_weather_particles(dt)
         
-        # Determine if we should do a full update or a partial update
+        # Determine if we should do a full update
         do_full_update = True
-        
-        # If FPS is low, skip some updates to maintain responsiveness
         if len(self.fps_history) > 5:
             avg_fps = sum(self.fps_history[-5:]) / 5
-            if avg_fps < 15:  # If FPS is below 15, do partial updates
-                do_full_update = (self.frame_count % 2 == 0)  # Only do full updates every other frame
+            if avg_fps < 15:
+                do_full_update = (self.frame_count % 2 == 0)
         
-        # Always update robots for responsiveness
+        # Always update robots
         for robot in self.robots:
             robot.detect_nearby_animals(self.animals)
-            # Pass resource_system to robot update method
             robot.update(dt, self.robots, self.resource_system)
             self._constrain_to_world(robot)
             if not robot.team or len(robot.team.members) == 0:
@@ -787,40 +804,34 @@ class GameState:
         
         # Update teams and evolution less frequently if FPS is low
         if do_full_update:
-            # Update evolution manager (can be less frequent)
+            # Update evolution manager
             self.evolution_manager.update(dt)
             
             # Update teams
             for team in self.teams:
                 if team.members:
                     team.update(dt)
-                    # Update team resources
                     TeamResourceExtension.update_team_resources(team, dt, self.resource_system)
                     
             # Update animals and handle breeding
             for i, animal1 in enumerate(self.animals):
                 if animal1.health > 0:
-                    # Pass resource_system to animal update method
                     animal1.update(dt, self.environment_system, self.world_grid, self.animals + self.robots, self.resource_system)
                     self._constrain_to_world(animal1)
                     
-                    # Check for breeding opportunities (less frequently)
-                    if not animal1.team and self.frame_count % 10 == 0:  # Only check every 10 frames
+                    # Check for breeding opportunities
+                    if not animal1.team and self.frame_count % 10 == 0:
                         for animal2 in self.animals[i+1:]:
                             if (animal2.health > 0 and not animal2.team and 
                                 self._are_animals_close(animal1, animal2, 50)):
-                                
-                                # Count current population of this species
                                 current_pop = sum(1 for a in self.animals 
                                               if a.name == animal1.name and a.health > 0)
-                                
                                 if self.evolution_manager.should_reproduce(animal1, animal2, current_pop):
                                     self._handle_reproduction(animal1, animal2)
         else:
             # Simplified update for animals when FPS is low
             for animal in self.animals:
                 if animal.health > 0:
-                    # Just update position and constrain to world
                     animal.x += animal.dx * dt
                     animal.y += animal.dy * dt
                     self._constrain_to_world(animal)
@@ -989,22 +1000,25 @@ class GameState:
             if entity.team:
                 tooltip_lines.extend([
                     f"Team Size: {len(entity.team.members)}",
-                    f"Formation: {entity.team.formation}"
+                    f"Formation: {entity.team.formation}",
+                    f"Base Level: {entity.team.base.level}",
+                    f"Defense Bonus: +{int((entity.team.base.get_defense_bonus() - 1) * 100)}%",
+                    f"Night Bonus: +{int((entity.team.base.get_night_bonus() - 1) * 100)}%"
                 ])
             tooltip_lines.append(f"State: {entity.state}")
             return "\n".join(tooltip_lines)
 
     def draw(self) -> None:
-        """Draw the game state with optimized rendering."""
+        """Draw the game state with base visualization."""
         self.screen.fill((0, 0, 0))
         
         # Draw world and entities
         self._draw_world()
         
-        # Draw resources with optimized rendering
+        # Draw resources
         self.resource_system.draw(self.screen, self.camera_x, self.camera_y, TILE_SIZE)
         
-        # Draw weather effects (visual only)
+        # Draw weather effects
         self._draw_weather_effects()
         
         # Calculate visible area for entity culling
@@ -1013,75 +1027,65 @@ class GameState:
         visible_min_y = self.camera_y - TILE_SIZE
         visible_max_y = self.camera_y + self.screen_height + TILE_SIZE
         
-        # Draw only visible animals
+        # Draw team bases first (so they appear behind entities)
+        for team in self.teams:
+            if team.base_established:
+                team.base.draw(self.screen, self.camera_x, self.camera_y)
+        
+        # Draw visible animals
         visible_animals = []
         for animal in self.animals:
             if animal.health > 0:
-                # Check if animal is in visible area (with horizontal wrapping)
-                world_width_px = self.width
-                
-                # Handle horizontal wrapping for visibility check
                 animal_x = animal.x
-                if abs(animal_x - self.camera_x) > world_width_px / 2:
+                if abs(animal_x - self.camera_x) > self.width / 2:
                     if animal_x > self.camera_x:
-                        animal_x -= world_width_px
+                        animal_x -= self.width
                     else:
-                        animal_x += world_width_px
-                
+                        animal_x += self.width
+                    
                 if (visible_min_x <= animal_x <= visible_max_x and 
                     visible_min_y <= animal.y <= visible_max_y):
                     visible_animals.append(animal)
         
-        # Draw visible animals
         for animal in visible_animals:
             animal.draw(self.screen, self.camera_x, self.camera_y, self.ui_manager.show_health_bars)
         
-        # Draw robots (usually fewer, so no need for extensive culling)
+        # Draw robots
         for robot in self.robots:
-            # Simple visibility check for robots
             robot_x = robot.x
-            world_width_px = self.width
-            
-            # Handle horizontal wrapping for visibility check
-            if abs(robot_x - self.camera_x) > world_width_px / 2:
+            if abs(robot_x - self.camera_x) > self.width / 2:
                 if robot_x > self.camera_x:
-                    robot_x -= world_width_px
+                    robot_x -= self.width
                 else:
-                    robot_x += world_width_px
+                    robot_x += self.width
                 
             if (visible_min_x <= robot_x <= visible_max_x and 
                 visible_min_y <= robot.y <= visible_max_y):
                 robot.draw(self.screen, self.camera_x, self.camera_y)
         
-        # Draw team structures (only for visible teams)
+        # Draw team structures
         visible_teams = []
         for team in self.teams:
             if team.leader:
                 leader_x = team.leader.x
-                world_width_px = self.width
-                
-                # Handle horizontal wrapping for visibility check
-                if abs(leader_x - self.camera_x) > world_width_px / 2:
+                if abs(leader_x - self.camera_x) > self.width / 2:
                     if leader_x > self.camera_x:
-                        leader_x -= world_width_px
+                        leader_x -= self.width
                     else:
-                        leader_x += world_width_px
+                        leader_x += self.width
                     
                 if (visible_min_x <= leader_x <= visible_max_x and 
                     visible_min_y <= team.leader.y <= visible_max_y):
                     visible_teams.append(team)
         
-        # Draw structures only for visible teams
         for team in visible_teams:
             TeamResourceExtension.draw_team_structures(team, self.screen, self.camera_x, self.camera_y)
         
         # Draw combat effects
         self.combat_manager.draw(self.screen, self.camera_x, self.camera_y)
         
-        # Get current terrain and longitude
+        # Get current terrain and environment data
         current_terrain, current_longitude = self._get_current_terrain()
-        
-        # Get environment data with terrain-specific weather and local time
         environment_data = {
             'time_of_day': self.environment_system.time_of_day,
             'weather_conditions': self.environment_system.weather_conditions,
@@ -1092,10 +1096,10 @@ class GameState:
             'world_width': WORLD_WIDTH
         }
         
-        # Store current time for UI clock animation
+        # Store current time for UI
         self.ui_manager.current_time_of_day = self.environment_system.get_local_time(current_longitude)
         
-        # Draw UI with all new features
+        # Draw UI
         self.ui_manager.draw(
             self.screen,
             self.animals,
