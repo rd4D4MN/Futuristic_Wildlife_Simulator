@@ -5,6 +5,7 @@ import random
 import pandas as pd
 import math
 from typing import List, Any, Dict
+import time
 
 # Import modules for map, entities, UI, and utilities
 from map.map_generator import (
@@ -28,6 +29,8 @@ from events.event_manager import EventManager
 from utils.resource_manager import ResourceManager
 from environment.environment_system import EnvironmentSystem
 from evolution.evolution_manager import EvolutionManager
+from resources.resource_system import ResourceSystem
+from resources.team_resources import TeamResourceExtension
 
 
 class GameState:
@@ -104,6 +107,9 @@ class GameState:
             'pixel_width': WORLD_WIDTH * TILE_SIZE,
             'pixel_height': WORLD_HEIGHT * TILE_SIZE
         }
+
+        # Initialize resource system
+        self.resource_system = ResourceSystem(self.world_grid)
 
     def _initialize_world(self) -> List[List[str]]:
         """Initialize the world grid."""
@@ -631,6 +637,10 @@ class GameState:
             team = Team(robot)
             robot.team = team
             robot.set_team_status(False)
+            
+            # Initialize team resources
+            TeamResourceExtension.initialize_team_resources(team)
+            
             teams.append(team)
         return teams
 
@@ -658,23 +668,21 @@ class GameState:
                             animals_to_add.append(animal)
 
                 if animals_to_add:
-                    # Find or create team
-                    team = next((t for t in self.teams if t.leader == robot), None)
-                    if not team:
-                        team = Team(robot)
-                        robot.team = team
-                        self.teams.append(team)
-
-                    # Only record formation if new members are actually added
-                    new_members = []
-                    for animal in animals_to_add:
-                        if not animal.team:  # Double-check animal is still free
-                            team.add_member(animal)
-                            animal.team = team
-                            new_members.append(animal)
-
-                    if new_members:  # Only record if we actually added new members
-                        self.event_manager.add_team_formation(id(robot), team.members)
+                    # Create team if robot doesn't have one
+                    if not robot.team:
+                        robot.team = Team(robot)
+                        self.teams.append(robot.team)
+                        # Initialize team resources
+                        TeamResourceExtension.initialize_team_resources(robot.team)
+                        
+                    # Add animals to team
+                    for animal in animals_to_add[:robot.max_team_size - len(robot.team.members)]:
+                        robot.team.add_member(animal)
+                        
+                    # Update robot state if team is full
+                    if len(robot.team.members) >= robot.max_team_size:
+                        robot.state = 'leading'
+                        robot.set_team_status(True)
 
     def _handle_battles(self) -> None:
         """Handle battles between nearby teams and territory conflicts."""
@@ -745,47 +753,77 @@ class GameState:
                         winner.experience += 50 + (25 if territory_conflict else 0)  # Extra XP for territory defense
 
     def update(self, dt: float) -> None:
-        """Update game state."""
+        """Update game state with performance optimizations."""
         self.event_manager.frame_count = self.frame_count
+        
+        # Update systems that need to run every frame
         self.environment_system.update(dt)
         self.combat_manager.update(dt)
-        self.evolution_manager.update(dt)
-
-        # Update weather particles
-        self._update_weather_particles(dt)
-
-        # Update robots first to maintain territory control
+        
+        # Only update resource system every frame (it has its own internal throttling)
+        self.resource_system.update(dt)
+        
+        # Update weather particles (visual only, can be throttled)
+        if self.frame_count % 2 == 0:  # Only update every other frame
+            self._update_weather_particles(dt)
+        
+        # Determine if we should do a full update or a partial update
+        do_full_update = True
+        
+        # If FPS is low, skip some updates to maintain responsiveness
+        if len(self.fps_history) > 5:
+            avg_fps = sum(self.fps_history[-5:]) / 5
+            if avg_fps < 15:  # If FPS is below 15, do partial updates
+                do_full_update = (self.frame_count % 2 == 0)  # Only do full updates every other frame
+        
+        # Always update robots for responsiveness
         for robot in self.robots:
             robot.detect_nearby_animals(self.animals)
             robot.update(dt, self.robots)
             self._constrain_to_world(robot)
             if not robot.team or len(robot.team.members) == 0:
                 robot.state = 'recruiting' if robot.nearby_animals else 'searching'
+        
+        # Update teams and evolution less frequently if FPS is low
+        if do_full_update:
+            # Update evolution manager (can be less frequent)
+            self.evolution_manager.update(dt)
+            
+            # Update teams
+            for team in self.teams:
+                if team.members:
+                    team.update(dt)
+                    # Update team resources
+                    TeamResourceExtension.update_team_resources(team, dt, self.resource_system)
+                    
+            # Update animals and handle breeding
+            for i, animal1 in enumerate(self.animals):
+                if animal1.health > 0:
+                    animal1.update(dt, self.environment_system, self.world_grid, self.animals + self.robots)
+                    self._constrain_to_world(animal1)
+                    
+                    # Check for breeding opportunities (less frequently)
+                    if not animal1.team and self.frame_count % 10 == 0:  # Only check every 10 frames
+                        for animal2 in self.animals[i+1:]:
+                            if (animal2.health > 0 and not animal2.team and 
+                                self._are_animals_close(animal1, animal2, 50)):
+                                
+                                # Count current population of this species
+                                current_pop = sum(1 for a in self.animals 
+                                              if a.name == animal1.name and a.health > 0)
+                                
+                                if self.evolution_manager.should_reproduce(animal1, animal2, current_pop):
+                                    self._handle_reproduction(animal1, animal2)
+        else:
+            # Simplified update for animals when FPS is low
+            for animal in self.animals:
+                if animal.health > 0:
+                    # Just update position and constrain to world
+                    animal.x += animal.dx * dt
+                    animal.y += animal.dy * dt
+                    self._constrain_to_world(animal)
 
-        # Then update teams and animals
-        for team in self.teams:
-            if team.members:
-                team.update(dt)
-                
-        # Update animals and handle breeding
-        for i, animal1 in enumerate(self.animals):
-            if animal1.health > 0:
-                animal1.update(dt, self.environment_system, self.world_grid, self.animals + self.robots)
-                self._constrain_to_world(animal1)
-                
-                # Check for breeding opportunities
-                if not animal1.team:  # Only unaffiliated animals can breed
-                    for animal2 in self.animals[i+1:]:
-                        if (animal2.health > 0 and not animal2.team and 
-                            self._are_animals_close(animal1, animal2, 50)):
-                            
-                            # Count current population of this species
-                            current_pop = sum(1 for a in self.animals 
-                                          if a.name == animal1.name and a.health > 0)
-                            
-                            if self.evolution_manager.should_reproduce(animal1, animal2, current_pop):
-                                self._handle_reproduction(animal1, animal2)
-
+        # These operations should run every frame for gameplay consistency
         self._handle_recruitment()
         self._handle_battles()
         self.teams = [t for t in self.teams if len(t.members) > 0]
@@ -955,13 +993,87 @@ class GameState:
             return "\n".join(tooltip_lines)
 
     def draw(self) -> None:
-        """Draw the game state with modern UI."""
+        """Draw the game state with optimized rendering."""
         self.screen.fill((0, 0, 0))
         
         # Draw world and entities
         self._draw_world()
+        
+        # Draw resources with optimized rendering
+        self.resource_system.draw(self.screen, self.camera_x, self.camera_y, TILE_SIZE)
+        
+        # Draw weather effects (visual only)
         self._draw_weather_effects()
-        self._draw_entities()
+        
+        # Calculate visible area for entity culling
+        visible_min_x = self.camera_x - TILE_SIZE
+        visible_max_x = self.camera_x + self.screen_width + TILE_SIZE
+        visible_min_y = self.camera_y - TILE_SIZE
+        visible_max_y = self.camera_y + self.screen_height + TILE_SIZE
+        
+        # Draw only visible animals
+        visible_animals = []
+        for animal in self.animals:
+            if animal.health > 0:
+                # Check if animal is in visible area (with horizontal wrapping)
+                world_width_px = self.width
+                
+                # Handle horizontal wrapping for visibility check
+                animal_x = animal.x
+                if abs(animal_x - self.camera_x) > world_width_px / 2:
+                    if animal_x > self.camera_x:
+                        animal_x -= world_width_px
+                    else:
+                        animal_x += world_width_px
+                
+                if (visible_min_x <= animal_x <= visible_max_x and 
+                    visible_min_y <= animal.y <= visible_max_y):
+                    visible_animals.append(animal)
+        
+        # Draw visible animals
+        for animal in visible_animals:
+            animal.draw(self.screen, self.camera_x, self.camera_y, self.ui_manager.show_health_bars)
+        
+        # Draw robots (usually fewer, so no need for extensive culling)
+        for robot in self.robots:
+            # Simple visibility check for robots
+            robot_x = robot.x
+            world_width_px = self.width
+            
+            # Handle horizontal wrapping for visibility check
+            if abs(robot_x - self.camera_x) > world_width_px / 2:
+                if robot_x > self.camera_x:
+                    robot_x -= world_width_px
+                else:
+                    robot_x += world_width_px
+                
+            if (visible_min_x <= robot_x <= visible_max_x and 
+                visible_min_y <= robot.y <= visible_max_y):
+                robot.draw(self.screen, self.camera_x, self.camera_y)
+        
+        # Draw team structures (only for visible teams)
+        visible_teams = []
+        for team in self.teams:
+            if team.leader:
+                leader_x = team.leader.x
+                world_width_px = self.width
+                
+                # Handle horizontal wrapping for visibility check
+                if abs(leader_x - self.camera_x) > world_width_px / 2:
+                    if leader_x > self.camera_x:
+                        leader_x -= world_width_px
+                    else:
+                        leader_x += world_width_px
+                    
+                if (visible_min_x <= leader_x <= visible_max_x and 
+                    visible_min_y <= team.leader.y <= visible_max_y):
+                    visible_teams.append(team)
+        
+        # Draw structures only for visible teams
+        for team in visible_teams:
+            TeamResourceExtension.draw_team_structures(team, self.screen, self.camera_x, self.camera_y)
+        
+        # Draw combat effects
         self.combat_manager.draw(self.screen, self.camera_x, self.camera_y)
         
         # Get current terrain and longitude
@@ -970,12 +1082,12 @@ class GameState:
         # Get environment data with terrain-specific weather and local time
         environment_data = {
             'time_of_day': self.environment_system.time_of_day,
-            'weather_conditions': self.environment_system.weather_conditions,  # Now includes all terrain weather
+            'weather_conditions': self.environment_system.weather_conditions,
             'season': self.environment_system.season,
-            'current_terrain': current_terrain,  # Add current terrain info
-            'time_data': self.environment_system.get_time_data(current_longitude),  # Add local time data
-            'current_longitude': current_longitude,  # Add current longitude for UI
-            'world_width': WORLD_WIDTH  # Add world width for meridian calculation
+            'current_terrain': current_terrain,
+            'time_data': self.environment_system.get_time_data(current_longitude),
+            'current_longitude': current_longitude,
+            'world_width': WORLD_WIDTH
         }
         
         # Store current time for UI clock animation
@@ -1156,13 +1268,6 @@ class GameState:
                         1
                     )
 
-    def _draw_entities(self) -> None:
-        """Draw all entities."""
-        for animal in self.animals:
-            animal.draw(self.screen, self.camera_x, self.camera_y, self.ui_manager.show_health_bars)
-        for robot in self.robots:
-            robot.draw(self.screen, self.camera_x, self.camera_y)
-
     def _handle_keydown(self, event: pygame.event.Event) -> None:
         """Handle keydown events with improved UI feedback."""
         if event.key == pygame.K_ESCAPE:
@@ -1330,14 +1435,50 @@ def main():
     # Create game with screen dimensions
     game = GameState(screen_width, screen_height)
     running = True
+    
+    # FPS tracking
+    fps_font = pygame.font.SysFont('Arial', 24)
+    fps_history = []
+    fps_update_time = 0
+    fps_display = "FPS: --"
 
     try:
         while game.running:  # Use game.running instead of separate running variable
+            # Start timing this frame
+            frame_start = time.time()
+            
+            # Calculate dt with a maximum to prevent physics issues
             dt = min(game.clock.tick(60) / 1000.0, 0.1)
+            
+            # Update FPS tracking
+            current_time = time.time()
+            if current_time - fps_update_time > 0.5:  # Update FPS display twice per second
+                if fps_history:
+                    avg_fps = sum(fps_history) / len(fps_history)
+                    fps_display = f"FPS: {avg_fps:.1f}"
+                fps_history = []
+                fps_update_time = current_time
+            
+            # Calculate instantaneous FPS
+            if dt > 0:
+                fps_history.append(1.0 / dt)
+            
+            # Game update
             if not game.handle_input():  # If handle_input returns False, break the loop
                 break
             game.update(dt)
             game.draw()
+            
+            # Draw FPS counter
+            fps_surface = fps_font.render(fps_display, True, (255, 255, 0))
+            game.screen.blit(fps_surface, (10, 10))
+            pygame.display.flip()
+            
+            # Store frame time for performance monitoring
+            frame_time = time.time() - frame_start
+            game.fps_history.append(1.0 / frame_time if frame_time > 0 else 0)
+            if len(game.fps_history) > 100:
+                game.fps_history = game.fps_history[-100:]
 
         # Generate final story
         story = game.event_manager.generate_story()

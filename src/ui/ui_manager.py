@@ -696,54 +696,76 @@ class UIManager:
         panel.blit(title, (self.team_padding, self.team_padding))
         
         # Draw column headers
-        headers = ["Robot", "Size", "Formation"]
+        headers = ["Robot", "Size", "Formation", "Strategy"]
         x = self.team_padding
-        y = header_height
+        y = self.team_padding + header_height
+        
         for header in headers:
-            text = self.fonts['normal'].render(header, True, self.theme['text'])
+            text = self.fonts['small_bold'].render(header, True, self.theme['text_secondary'])
             panel.blit(text, (x, y))
-            x += 100
-            
-        # Draw separator line
-        pygame.draw.line(panel, self.theme['border'],
-                        (self.team_padding, header_height + 20),
-                        (panel_width - self.team_padding, header_height + 20))
+            x += panel_width // len(headers)
         
-        # Draw teams
-        y = header_height + 25
+        # Draw team rows
         for i, team in enumerate(active_teams[:self.max_visible_teams]):
-            # Background for alternate rows
-            if i % 2 == 0:
-                pygame.draw.rect(panel, self.theme['highlight'], 
-                               (0, y, panel_width, row_height))
+            y = self.team_padding + header_height + (i * row_height) + 20
             
-            x = self.team_padding
+            # Draw team color indicator
+            pygame.draw.rect(panel, team.color, (self.team_padding, y, 10, 10))
             
-            # Use consistent Robot-XXX format
-            if team.get_leader_name().startswith('Robot'):
-                robot_name = team.get_leader_name()  # Already in correct format
-            else:
-                robot_name = team.get_leader_name()
-
-            # Team name
-            name = self.fonts['normal'].render(robot_name, True, self.theme['text'])
-            panel.blit(name, (x, y + 2))
-            x += 100
+            # Draw team leader name
+            leader_name = team.get_leader_name()
+            leader_text = self.fonts['small'].render(leader_name[:10], True, self.theme['text'])
+            panel.blit(leader_text, (self.team_padding + 15, y - 5))
             
-            # Team size
-            size = self.fonts['normal'].render(str(len(team.members)), True, self.theme['text'])
-            panel.blit(size, (x, y + 2))
-            x += 100
+            # Draw team size
+            size_text = self.fonts['small'].render(str(team.get_member_count()), True, self.theme['text'])
+            panel.blit(size_text, (panel_width // 4, y - 5))
             
-            # Formation with color coding
-            formation_color = self.theme['success'] if team.formation == 'aggressive' else self.theme['text']
-            formation = self.fonts['normal'].render(team.formation, True, formation_color)
-            panel.blit(formation, (x, y + 2))
+            # Draw formation
+            formation = getattr(team, 'formation', 'unknown')
+            formation_text = self.fonts['small'].render(formation, True, self.theme['text'])
+            panel.blit(formation_text, (panel_width // 2, y - 5))
             
-            y += row_height
+            # Draw resource strategy if available
+            if hasattr(team, 'resource_strategy'):
+                strategy_text = self.fonts['small'].render(team.resource_strategy, True, self.theme['text'])
+                panel.blit(strategy_text, (3 * panel_width // 4, y - 5))
+            
+            # Draw resource icons and counts if team has inventory
+            if hasattr(team, 'inventory'):
+                resource_y = y + 15
+                resource_x = self.team_padding
+                
+                # Define resource icons
+                resource_icons = {
+                    'food_plant': '🍎',
+                    'food_meat': '🍖',
+                    'wood': '🌲',
+                    'stone': '🗿',
+                    'water': '💧',
+                    'medicinal': '💊',
+                    'minerals': '💎'
+                }
+                
+                # Draw up to 4 most important resources
+                important_resources = ['food_plant', 'food_meat', 'wood', 'stone']
+                for res_type in important_resources:
+                    if res_type in team.inventory:
+                        amount = team.inventory[res_type]
+                        if amount > 0:
+                            # Draw icon and amount
+                            icon_text = self.fonts['small'].render(resource_icons.get(res_type, '?'), True, self.theme['text'])
+                            panel.blit(icon_text, (resource_x, resource_y))
+                            
+                            amount_text = self.fonts['tiny'].render(f"{int(amount)}", True, self.theme['text_secondary'])
+                            panel.blit(amount_text, (resource_x + 20, resource_y + 2))
+                            
+                            resource_x += 50
+                            if resource_x > panel_width - 50:
+                                break
         
-        # Draw panel with margin from top-left, leaving space for spectator info
-        screen.blit(panel, (10, self.spectator_info_height + 20))
+        # Draw panel on screen
+        screen.blit(panel, (self.screen_width - panel_width - 10, 10))
 
     def toggle_ui_element(self, element: str) -> None:
         """Toggle UI elements with debug prints."""

@@ -76,3 +76,4 @@ build/
 # Drafts
 draft
 data
+!data/processed_animals.csv
