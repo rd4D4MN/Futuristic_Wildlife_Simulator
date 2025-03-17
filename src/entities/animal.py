@@ -126,6 +126,13 @@ class Animal(pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.rect.center = (self.x, self.y)
 
+        # New attributes for animal behavior
+        self.mood_points = 100  # Mood points affect behavior
+        self.hunger = 0  # Hunger level
+        self.thirst = 0  # Thirst level
+        self.sleepiness = 0  # Sleepiness level
+        self.social_needs = 0  # Social interaction needs
+
     #########################
     # 2. Core Behavior
     #########################
@@ -224,6 +231,26 @@ class Animal(pygame.sprite.Sprite):
         # Find new resource targets occasionally
         if resource_system and random.random() < 0.01:
             self._find_resource_target(resource_system)
+
+        # Update new behaviors
+        self.hunger += dt * 0.1  # Increase hunger over time
+        self.thirst += dt * 0.1  # Increase thirst over time
+        self.sleepiness += dt * 0.1  # Increase sleepiness over time
+        self.social_needs += dt * 0.1  # Increase social needs over time
+
+        # Decision-making logic
+        if self.hunger > 70:
+            # Find food and eat
+            pass
+        if self.thirst > 70:
+            # Find water and drink
+            pass
+        if self.sleepiness > 70:
+            # Find a safe place to sleep
+            pass
+        if self.social_needs > 70:
+            # Find other animals to team up with
+            pass
 
     def _update_terrain_effects(self, dt: float, world_grid):
         """Apply effects based on the current terrain with more noticeable effects."""
@@ -1001,4 +1028,49 @@ class Animal(pygame.sprite.Sprite):
                 modifier *= 0.8
                 
         return max(0.2, min(modifier, 2.0))  # Clamp between 0.2 and 2.0
+
+    def eat(self, food_type: str, amount: float):
+        """Simulate eating behavior."""
+        if food_type == 'plant' and self._can_eat_plants():
+            self.hunger = max(0, self.hunger - amount)
+            self.mood_points += amount * 2
+        elif food_type == 'meat' and self._can_eat_meat():
+            self.hunger = max(0, self.hunger - amount)
+            self.mood_points += amount * 2
+
+    def drink(self, amount: float):
+        """Simulate drinking behavior."""
+        self.thirst = max(0, self.thirst - amount)
+        self.mood_points += amount
+
+    def team_up(self, other: 'Animal'):
+        """Simulate teaming up with another animal."""
+        if not self.team and not other.team:
+            new_team = Team(self)
+            new_team.add_member(other)
+            self.team = new_team
+            other.team = new_team
+            self.social_needs = max(0, self.social_needs - 10)
+            self.mood_points += 10
+
+    def attack(self, target: 'Animal'):
+        """Simulate attacking another animal."""
+        if self.hunger > 50 and target.health > 0:
+            damage = min(10, target.health)
+            target.health -= damage
+            self.hunger = max(0, self.hunger - damage)
+            self.mood_points -= 5
+
+    def sleep(self, duration: float):
+        """Simulate sleeping behavior."""
+        self.sleepiness = max(0, self.sleepiness - duration)
+        self.health = min(self.max_health, self.health + duration * 2)
+        self.mood_points += duration
+
+    def mate(self, partner: 'Animal'):
+        """Simulate mating behavior."""
+        if self.mood_points > 50 and partner.mood_points > 50:
+            self.mood_points -= 20
+            partner.mood_points -= 20
+            # Logic to create offspring can be added here
 

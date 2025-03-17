@@ -1580,4 +1580,60 @@ class UIManager:
         # Invalidate the battle log cache
         self.battle_log_cached_surface = None
 
+    def _get_entity_tooltip(self, entity: Any) -> str:
+        """Get tooltip text for an entity"""
+        if hasattr(entity, 'name'):  # Animal
+            tooltip_lines = [
+                f"{entity.name}",
+                f"Health: {int(entity.health)}/{int(entity.max_health)}",
+                f"Mood: {entity.mood_points}",
+                f"Hunger: {entity.hunger}",
+                f"Thirst: {entity.thirst}",
+                f"Sleepiness: {entity.sleepiness}",
+                f"Social Needs: {entity.social_needs}"
+            ]
+            
+            # Add terrain information and effects
+            if hasattr(entity, 'current_terrain') and entity.current_terrain:
+                terrain_compatibility = entity._get_terrain_compatibility(entity.current_terrain)
+                
+                # Add terrain info
+                tooltip_lines.append(f"Current Terrain: {entity.current_terrain}")
+                tooltip_lines.append(f"Preferred Habitat: {entity.preferred_habitat}")
+                
+                # Add compatibility and effects
+                if terrain_compatibility == 'optimal':
+                    tooltip_lines.append("Terrain: Optimal (Health +)")
+                elif terrain_compatibility == 'survivable':
+                    tooltip_lines.append("Terrain: Survivable")
+                elif terrain_compatibility == 'harmful':
+                    tooltip_lines.append("Terrain: Harmful (Health -)")
+                
+                # Add speed effect if not normal
+                if entity.terrain_speed_effect != 1.0:
+                    speed_effect = int((entity.terrain_speed_effect - 1.0) * 100)
+                    if speed_effect < 0:
+                        tooltip_lines.append(f"Speed: {speed_effect}%")
+                    else:
+                        tooltip_lines.append(f"Speed: +{speed_effect}%")
+            
+            if entity.team:
+                tooltip_lines.extend([
+                    f"Team: {entity.team.get_leader_name()}",
+                    f"Role: {'Leader' if entity.team.leader == entity else 'Member'}"
+                ])
+            return "\n".join(tooltip_lines)
+        else:  # Robot
+            tooltip_lines = [entity.name]  # Use robot's name property
+            if entity.team:
+                tooltip_lines.extend([
+                    f"Team Size: {len(entity.team.members)}",
+                    f"Formation: {entity.team.formation}",
+                    f"Base Level: {entity.team.base.level}",
+                    f"Defense Bonus: +{int((entity.team.base.get_defense_bonus() - 1) * 100)}%",
+                    f"Night Bonus: +{int((entity.team.base.get_night_bonus() - 1) * 100)}%"
+                ])
+            tooltip_lines.append(f"State: {entity.state}")
+            return "\n".join(tooltip_lines)
+
 

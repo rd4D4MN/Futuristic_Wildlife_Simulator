@@ -31,6 +31,7 @@ from environment.environment_system import EnvironmentSystem
 from evolution.evolution_manager import EvolutionManager
 from resources.resource_system import ResourceSystem
 from resources.team_resources import TeamResourceExtension
+from setup.game_setup import setup_player_robot, is_player_robot
 
 
 class GameState:
@@ -89,6 +90,13 @@ class GameState:
         self.animals = self._spawn_animals()
         self.robots = self._spawn_robots()
         self.teams = self._form_initial_teams()
+        
+        # Set up player's robot as first robot if not in spectator mode
+        self.player_robot = None
+        if not self.spectating:
+            self.player_robot = self.robots[0] if self.robots else None
+            if self.player_robot:
+                self.spectated_robot_index = 0
 
         # Initialize managers
         self.combat_manager = CombatManager()
@@ -590,9 +598,12 @@ class GameState:
         return 'grassland'
 
     def _spawn_robots(self) -> List[Robot]:
-        """Spawn robots in a grid pattern across the world."""
+        """Spawn robots in a grid pattern across the world with player robot."""
         robots = []
-        num_robots = 48
+        num_robots = 47  # Reduced by 1 to make room for player robot
+        
+        # Run player setup to get customized robot
+        player_robot = setup_player_robot(self.screen)
         
         # Calculate grid dimensions to get a roughly square arrangement
         grid_size = int(math.sqrt(num_robots))  # e.g., 5x5 grid for 24 robots
@@ -627,7 +638,32 @@ class GameState:
             robot.world_grid = self.world_grid
             robot.territory_center = (x, y)
             robots.append(robot)
+        
+        # Add player robot with special position (closest to center)
+        if player_robot:
+            # Find center of the world
+            center_x = self.width / 2
+            center_y = self.height / 2
             
+            # Select the position closest to the center for the player
+            center_position = min(positions, key=lambda pos: math.sqrt((pos[0] - center_x)**2 + (pos[1] - center_y)**2))
+            
+            # Place player robot
+            player_robot.x = center_position[0]
+            player_robot.y = center_position[1]
+            player_robot.world_grid = self.world_grid
+            player_robot.territory_center = (player_robot.x, player_robot.y)
+            
+            # Add player robot to the front of the list
+            robots.insert(0, player_robot)
+            
+            # Start following the player's robot
+            self.spectating = True
+            self.spectated_robot_index = 0
+            
+            # Log player creation
+            print(f"Player robot '{player_robot.name}' created with ideology: {player_robot.ideology}, archetype: {player_robot.archetype}")
+        
         return robots
 
     def _form_initial_teams(self) -> List[Team]:
@@ -828,6 +864,23 @@ class GameState:
                                               if a.name == animal1.name and a.health > 0)
                                 if self.evolution_manager.should_reproduce(animal1, animal2, current_pop):
                                     self._handle_reproduction(animal1, animal2)
+
+                    # New behavior logic
+                    if animal1.hunger > 70:
+                        # Find food and eat
+                        animal1.eat('plant', 10)  # Example action
+                    if animal1.thirst > 70:
+                        # Find water and drink
+                        animal1.drink(10)  # Example action
+                    if animal1.sleepiness > 70:
+                        # Find a safe place to sleep
+                        animal1.sleep(5)  # Example action
+                    if animal1.social_needs > 70:
+                        # Find other animals to team up with
+                        for animal2 in self.animals[i+1:]:
+                            if animal2.health > 0 and not animal2.team:
+                                animal1.team_up(animal2)
+                                break
         else:
             # Simplified update for animals when FPS is low
             for animal in self.animals:
@@ -1306,17 +1359,24 @@ class GameState:
             # Toggle spectator mode with notification
             self.spectating = not self.spectating
             if self.spectating:
-                self.spectated_robot_index = 0 if self.robots else -1
+                if is_player_robot(self.robots[0]) and self.spectated_robot_index != 0:
+                    # Return to player robot
+                    self.spectated_robot_index = 0
+                    self.ui_manager.add_notification(f"Following your robot: {self.robots[0].name}", 'info')
+                elif self.spectated_robot_index < 0:
+                    self.spectated_robot_index = 0
             else:
                 self.ui_manager.add_notification("Exited spectator mode", 'info')
         elif event.key == pygame.K_LEFT and self.spectating:
             # Previous robot
             if self.robots:
                 self.spectated_robot_index = (self.spectated_robot_index - 1) % len(self.robots)
+                self.ui_manager.add_notification(f"Following: {self.robots[self.spectated_robot_index].name}", 'info')
         elif event.key == pygame.K_RIGHT and self.spectating:
             # Next robot
             if self.robots:
                 self.spectated_robot_index = (self.spectated_robot_index + 1) % len(self.robots)
+                self.ui_manager.add_notification(f"Following: {self.robots[self.spectated_robot_index].name}", 'info')
         # Add time scale controls
         elif event.key == pygame.K_PLUS or event.key == pygame.K_EQUALS:
             # Increase time scale
