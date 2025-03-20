@@ -4,6 +4,8 @@ import pygame
 from typing import Dict, Any, List, Optional, Tuple, TYPE_CHECKING
 import os
 from src.evolution.genome import Genome
+from src.systems.health_mood_system import HealthMoodSystem
+from src.entities.team import Team
 
 if TYPE_CHECKING:
     from src.entities.team import Team
@@ -28,6 +30,18 @@ class Animal(pygame.sprite.Sprite):
         self.team: Optional['Team'] = None
         self.target = None
         self.world_grid = None
+        
+        # Health and mood system
+        self.health_mood_system = HealthMoodSystem()
+        self.max_mood = 100.0
+        self.mood_points = self.max_mood
+        self.status_effects = {}  # Dictionary of {status: remaining_duration}
+        
+        # Needs attributes
+        self.hunger = 0.0
+        self.thirst = 0.0
+        self.exhaustion = 0.0
+        self.social_needs = 0.0
         
         # Position and movement
         self.x = 0
@@ -126,13 +140,6 @@ class Animal(pygame.sprite.Sprite):
         self.rect = self.image.get_rect()
         self.rect.center = (self.x, self.y)
 
-        # New attributes for animal behavior
-        self.mood_points = 100  # Mood points affect behavior
-        self.hunger = 0  # Hunger level
-        self.thirst = 0  # Thirst level
-        self.sleepiness = 0  # Sleepiness level
-        self.social_needs = 0  # Social interaction needs
-
     #########################
     # 2. Core Behavior
     #########################
@@ -210,13 +217,31 @@ class Animal(pygame.sprite.Sprite):
                             else:
                                 # Not in a team, use resource directly
                                 if resource['type'] == 'food_plant' and self._can_eat_plants():
-                                    self.heal(actual_gathered * 2)
+                                    # Apply effect using health_mood_system
+                                    hp_change, mood_change = self.health_mood_system.apply_action('eat_plant', actual_gathered / 5.0)
+                                    self.health = min(self.max_health, self.health + hp_change)
+                                    self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+                                    self.hunger = max(0, self.hunger - actual_gathered * 10)
                                 elif resource['type'] == 'food_meat' and self._can_eat_meat():
-                                    self.heal(actual_gathered * 2)
+                                    # Apply effect using health_mood_system
+                                    hp_change, mood_change = self.health_mood_system.apply_action('eat_meat', actual_gathered / 5.0)
+                                    self.health = min(self.max_health, self.health + hp_change)
+                                    self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+                                    self.hunger = max(0, self.hunger - actual_gathered * 15)
                                 elif resource['type'] == 'water':
-                                    self.heal(actual_gathered)
+                                    # Apply effect using health_mood_system
+                                    hp_change, mood_change = self.health_mood_system.apply_action('drink_water', actual_gathered / 5.0)
+                                    self.health = min(self.max_health, self.health + hp_change)
+                                    self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+                                    self.thirst = max(0, self.thirst - actual_gathered * 20)
                                 elif resource['type'] == 'medicinal':
+                                    # Apply healing effect
                                     self.heal(actual_gathered * 3)
+                                    # Remove negative status effects
+                                    if 'injured' in self.status_effects:
+                                        del self.status_effects['injured']
+                                    if 'sick' in self.status_effects:
+                                        del self.status_effects['sick']
                             
                             # Reset resource target after successful gathering
                             self.resource_target = None
@@ -232,25 +257,21 @@ class Animal(pygame.sprite.Sprite):
         if resource_system and random.random() < 0.01:
             self._find_resource_target(resource_system)
 
-        # Update new behaviors
-        self.hunger += dt * 0.1  # Increase hunger over time
-        self.thirst += dt * 0.1  # Increase thirst over time
-        self.sleepiness += dt * 0.1  # Increase sleepiness over time
-        self.social_needs += dt * 0.1  # Increase social needs over time
-
-        # Decision-making logic
-        if self.hunger > 70:
-            # Find food and eat
-            pass
-        if self.thirst > 70:
-            # Find water and drink
-            pass
-        if self.sleepiness > 70:
-            # Find a safe place to sleep
-            pass
-        if self.social_needs > 70:
-            # Find other animals to team up with
-            pass
+        # Update animal needs
+        self._update_needs(dt)
+        
+        # Update status effects
+        self._update_status_effects(dt)
+        
+        # Make decisions based on needs
+        should_seek, resource_type = self.health_mood_system.should_seek_resource(
+            self.health, self.max_health,
+            self.mood_points, self.max_mood,
+            self.hunger, self.thirst, self.exhaustion
+        )
+        
+        if should_seek and self.state != "at_resource" and resource_system:
+            self._seek_resource_by_type(resource_type, resource_system)
 
     def _update_terrain_effects(self, dt: float, world_grid):
         """Apply effects based on the current terrain with more noticeable effects."""
@@ -517,7 +538,7 @@ class Animal(pygame.sprite.Sprite):
     # 4. Rendering
     #########################
     def draw(self, screen: pygame.Surface, camera_x: int = 0, camera_y: int = 0, show_health_bars: bool = False):
-        """Draw the animal and its health bar if enabled."""
+        """Draw the animal and its indicators as specified."""
         if self.health <= 0:
             return
             
@@ -529,227 +550,170 @@ class Animal(pygame.sprite.Sprite):
         self.camera_x = camera_x
         self.camera_y = camera_y
         
-        # Draw terrain effect aura
-        self._draw_terrain_effect_aura(screen, camera_x, camera_y)
-        
-        # Draw the animal
+        # Draw the animal image
         screen.blit(self.image, (self.x - camera_x, self.y - camera_y))
-        
-        # Draw state indicator (moved above health bar)
-        self._draw_state_indicator(screen, self.x - camera_x + 32, self.y - camera_y - 30)
             
-        if show_health_bars:
-            self._draw_health_bar(screen, camera_x, camera_y)
-
-    def _draw_terrain_effect_aura(self, screen: pygame.Surface, camera_x: int, camera_y: int):
-        """Draw an aura around the animal based on terrain effects."""
-        if not hasattr(self, 'terrain_health_effect') or not hasattr(self, 'terrain_speed_effect'):
-            return
-            
-        screen_x = self.x - camera_x + 32  # Center of sprite
-        screen_y = self.y - camera_y + 32
-        aura_size = 40  # Size of the aura
-        
-        # Health effect aura
-        if self.terrain_health_effect > 0:
-            # Healing aura (green)
-            aura = pygame.Surface((aura_size * 2, aura_size * 2), pygame.SRCALPHA)
-            pygame.draw.circle(aura, (0, 255, 0, 50), (aura_size, aura_size), aura_size)
-            screen.blit(aura, (screen_x - aura_size, screen_y - aura_size))
-            
-            # Add healing particles
-            if random.random() < 0.1:
-                angle = random.uniform(0, 2 * math.pi)
-                distance = random.uniform(0, 20)
-                particle_x = screen_x + math.cos(angle) * distance
-                particle_y = screen_y + math.sin(angle) * distance
-                
-                pygame.draw.circle(
-                    screen,
-                    (100, 255, 100),
-                    (int(particle_x), int(particle_y)),
-                    2
-                )
-                
-        elif self.terrain_health_effect < 0:
-            # Harmful aura (red)
-            aura = pygame.Surface((aura_size * 2, aura_size * 2), pygame.SRCALPHA)
-            pygame.draw.circle(aura, (255, 0, 0, 50), (aura_size, aura_size), aura_size)
-            screen.blit(aura, (screen_x - aura_size, screen_y - aura_size))
-            
-            # Add damage particles
-            if random.random() < 0.1:
-                angle = random.uniform(0, 2 * math.pi)
-                distance = random.uniform(0, 20)
-                particle_x = screen_x + math.cos(angle) * distance
-                particle_y = screen_y + math.sin(angle) * distance
-                
-                pygame.draw.circle(
-                    screen,
-                    (255, 100, 100),
-                    (int(particle_x), int(particle_y)),
-                    2
-                )
-        
-        # Speed effect indicator
-        if self.terrain_speed_effect != 1.0:
-            if self.terrain_speed_effect > 1.0:
-                # Speed boost (blue trail)
-                for i in range(3):
-                    offset = (i + 1) * 5
-                    alpha = 150 - (i * 50)
-                    trail = pygame.Surface((40, 40), pygame.SRCALPHA)
-                    pygame.draw.circle(trail, (100, 100, 255, alpha), (20, 20), 20 - i)
-                    screen.blit(trail, (screen_x - 20 - offset, screen_y - 20))
-            else:
-                # Slowed (amber glow)
-                slow_indicator = pygame.Surface((aura_size * 2, aura_size * 2), pygame.SRCALPHA)
-                pygame.draw.circle(slow_indicator, (255, 200, 0, 70), (aura_size, aura_size), aura_size)
-                screen.blit(slow_indicator, (screen_x - aura_size, screen_y - aura_size))
+        # Always show the health bars and name
+        self._draw_health_bar(screen, camera_x, camera_y)
 
     def _draw_health_bar(self, screen: pygame.Surface, camera_x: int, camera_y: int):
-        """Draw a health bar above the animal with safety checks."""
+        """Draw a health bar above the animal with name, health/mood bars, and change indicators."""
         # Safety checks for health values
         if not hasattr(self, 'health') or not hasattr(self, 'max_health'):
             return
             
         if self.health is None or self.max_health is None or self.max_health <= 0:
             return
-            
+        
+        # Define basic dimensions
         bar_width = 32  # Half of sprite width
         bar_height = 4
+        name_height = 10  # Height for name text
         
         # Ensure health values are valid
         health = max(0, min(self.health, self.max_health))
         max_health = max(1, self.max_health)  # Prevent division by zero
         health_ratio = health / max_health
         
-        # Ensure ratio is valid
+        # Calculate mood values
+        mood = max(0, min(self.mood_points, self.max_mood))
+        max_mood = max(1, self.max_mood)  # Prevent division by zero
+        mood_ratio = mood / max_mood
+        
+        # Ensure ratios are valid
         if not (0 <= health_ratio <= 1):
             health_ratio = 0
+        if not (0 <= mood_ratio <= 1):
+            mood_ratio = 0
             
-        fill_width = int(bar_width * health_ratio)
+        # Calculate fill widths
+        health_fill_width = int(bar_width * health_ratio)
+        mood_fill_width = int(bar_width * mood_ratio)
         
-        # Center the health bar above the sprite
+        # Position calculations
         bar_x = self.x - camera_x - (bar_width // 2) + 32  # Add half sprite width
-        bar_y = self.y - camera_y - 10  # Position above sprite
+        name_y = self.y - camera_y - 30  # Position for name
+        health_bar_y = name_y + name_height + 2  # Position for health bar
+        mood_bar_y = health_bar_y + bar_height + 2  # Position for mood bar
+        reason_y = mood_bar_y + bar_height + 2  # Position for reason text
         
-        # Arrow size and position (common for both up and down arrows)
+        # Arrow size and position for health
         arrow_size = bar_height * 1.5  # Smaller arrow
-        arrow_x = bar_x - arrow_size - 2  # Position left of health bar with space
-        arrow_y = bar_y + (bar_height / 2) - (arrow_size / 2)  # Center vertically with health bar
+        health_arrow_x = bar_x - arrow_size - 2  # Position left of health bar
+        health_arrow_y = health_bar_y + (bar_height / 2) - (arrow_size / 2)  # Center with health bar
         
-        # Draw HP down indicator if in harmful terrain
-        if hasattr(self, 'terrain_health_effect') and self.terrain_health_effect < 0:
-            # Draw a downward-pointing arrow (red)
+        # Arrow position for mood (same size as health)
+        mood_arrow_x = bar_x - arrow_size - 2  # Position left of mood bar
+        mood_arrow_y = mood_bar_y + (bar_height / 2) - (arrow_size / 2)  # Center with mood bar
+        
+        # Draw name text
+        font = pygame.font.Font(None, 16)  # Small font for name
+        name_surface = font.render(self.name, True, (255, 255, 255))  # White text
+        name_rect = name_surface.get_rect(center=(bar_x + bar_width//2, name_y + name_height//2))
+        screen.blit(name_surface, name_rect)
+        
+        # Draw health bar
+        pygame.draw.rect(screen, (50, 50, 50), [bar_x, health_bar_y, bar_width, bar_height])  # Border
+        
+        # Health bar colors based on health percentage
+        if health_ratio > 0.7:
+            health_color = (0, 255, 0)  # Green
+        elif health_ratio > 0.3:
+            health_color = (255, 255, 0)  # Yellow
+        else:
+            health_color = (255, 0, 0)  # Red
+            
+        # Draw health fill
+        pygame.draw.rect(screen, health_color, [bar_x, health_bar_y, health_fill_width, bar_height])
+        
+        # Draw HP up/down indicator if health is changing
+        health_change_reason = ""
+        if hasattr(self, 'terrain_health_effect'):
+            if self.terrain_health_effect < 0:
+                # Health decreasing - draw down arrow (red)
+                pygame.draw.polygon(screen, (255, 0, 0), [
+                    (health_arrow_x, health_arrow_y + arrow_size),  # Bottom point
+                    (health_arrow_x - arrow_size/2, health_arrow_y),  # Top left
+                    (health_arrow_x + arrow_size/2, health_arrow_y)   # Top right
+                ])
+                health_change_reason = "Terrain"
+            elif self.terrain_health_effect > 0:
+                # Health increasing - draw up arrow (green)
+                pygame.draw.polygon(screen, (0, 255, 0), [
+                    (health_arrow_x, health_arrow_y),            # Top point
+                    (health_arrow_x - arrow_size/2, health_arrow_y + arrow_size),  # Bottom left
+                    (health_arrow_x + arrow_size/2, health_arrow_y + arrow_size)   # Bottom right
+                ])
+                health_change_reason = "Terrain"
+                
+        # Draw status-based health indicators
+        if 'hunger' in self.status_effects or 'thirst' in self.status_effects:
+            # These status effects decrease health - draw down arrow
             pygame.draw.polygon(screen, (255, 0, 0), [
-                (arrow_x, arrow_y + arrow_size),  # Bottom point
-                (arrow_x - arrow_size/2, arrow_y),  # Top left
-                (arrow_x + arrow_size/2, arrow_y)   # Top right
+                (health_arrow_x, health_arrow_y + arrow_size),  # Bottom point
+                (health_arrow_x - arrow_size/2, health_arrow_y),  # Top left
+                (health_arrow_x + arrow_size/2, health_arrow_y)   # Top right
             ])
-        # Draw HP up indicator if in optimal terrain (regenerating health)
-        elif hasattr(self, 'terrain_health_effect') and self.terrain_health_effect > 0:
-            # Draw an upward-pointing arrow (green)
-            pygame.draw.polygon(screen, (0, 255, 0), [
-                (arrow_x, arrow_y),  # Top point
-                (arrow_x - arrow_size/2, arrow_y + arrow_size),  # Bottom left
-                (arrow_x + arrow_size/2, arrow_y + arrow_size)   # Bottom right
+            health_change_reason = "Hunger/Thirst" if not health_change_reason else health_change_reason
+        
+        # Draw mood bar
+        pygame.draw.rect(screen, (50, 50, 50), [bar_x, mood_bar_y, bar_width, bar_height])  # Border
+        
+        # Mood bar colors based on mood percentage
+        if mood_ratio > 0.7:
+            mood_color = (0, 200, 255)  # Cyan (happy)
+        elif mood_ratio > 0.3:
+            mood_color = (200, 200, 255)  # Light blue (content)
+        else:
+            mood_color = (150, 50, 255)  # Purple (unhappy)
+            
+        # Draw mood fill
+        pygame.draw.rect(screen, mood_color, [bar_x, mood_bar_y, mood_fill_width, bar_height])
+        
+        # Draw mood up/down indicator based on status effects
+        mood_change_reason = ""
+        mood_increasing = False
+        mood_decreasing = False
+        
+        # Check status effects that affect mood
+        for status in self.status_effects:
+            if status in ['content', 'excited']:
+                mood_increasing = True
+                mood_change_reason = status.capitalize()
+            elif status in ['hunger', 'thirst', 'exhaustion', 'injured', 'sick', 'scared', 'angry']:
+                mood_decreasing = True
+                mood_change_reason = status.capitalize()
+        
+        # Draw appropriate mood indicator
+        if mood_decreasing:
+            # Mood decreasing - draw down arrow (purple)
+            pygame.draw.polygon(screen, (150, 50, 255), [
+                (mood_arrow_x, mood_arrow_y + arrow_size),  # Bottom point
+                (mood_arrow_x - arrow_size/2, mood_arrow_y),  # Top left
+                (mood_arrow_x + arrow_size/2, mood_arrow_y)   # Top right
+            ])
+        elif mood_increasing:
+            # Mood increasing - draw up arrow (cyan)
+            pygame.draw.polygon(screen, (0, 200, 255), [
+                (mood_arrow_x, mood_arrow_y),            # Top point
+                (mood_arrow_x - arrow_size/2, mood_arrow_y + arrow_size),  # Bottom left
+                (mood_arrow_x + arrow_size/2, mood_arrow_y + arrow_size)   # Bottom right
             ])
         
-        # Draw background (red)
-        pygame.draw.rect(screen, (200, 0, 0), (bar_x, bar_y, bar_width, bar_height))
-        # Draw health (green)
-        pygame.draw.rect(screen, (0, 200, 0), (bar_x, bar_y, fill_width, bar_height))
-        # Draw border
-        pygame.draw.rect(screen, (0, 0, 0), (bar_x, bar_y, bar_width, bar_height), 1)
-
-    def _draw_state_indicator(self, screen: pygame.Surface, x: int, y: int):
-        """Draw an indicator showing the animal's current state/goal with improved visibility."""
-        # Check if animal is seeking resources
-        if hasattr(self, 'state') and self.state == "seeking_resource" and hasattr(self, 'resource_target'):
-            # Define colors for different resource types
-            resource_colors = {
-                'food_plant': (0, 200, 0),    # Green
-                'food_meat': (200, 0, 0),     # Red
-                'wood': (139, 69, 19),        # Brown
-                'stone': (128, 128, 128),     # Gray
-                'water': (0, 0, 255),         # Blue
-                'medicinal': (255, 0, 255),   # Purple
-                'minerals': (255, 215, 0),    # Gold
-                None: (255, 255, 255)         # White for any resource
-            }
-            
-            # Get color based on resource type
-            color = resource_colors.get(self.resource_target_type, (255, 255, 255))
-            
-            # Draw a background for better visibility
-            pygame.draw.circle(screen, (0, 0, 0), (x, y), 8)
-            
-            # Draw a colored circle indicating resource type
-            pygame.draw.circle(screen, color, (x, y), 6)
-            
-            # Draw a small icon based on resource type
-            if self.resource_target_type == 'food_plant':
-                # Draw a berry/fruit icon
-                pygame.draw.circle(screen, (200, 0, 0), (x, y-2), 2)  # Red berry
-                pygame.draw.circle(screen, (0, 100, 0), (x+2, y+2), 2)  # Leaf
-                pygame.draw.circle(screen, (0, 100, 0), (x-2, y+2), 2)  # Leaf
-            elif self.resource_target_type == 'food_meat':
-                # Draw a drumstick shape
-                pygame.draw.circle(screen, (150, 75, 0), (x, y), 3)  # Brown meat
-                pygame.draw.line(screen, (200, 200, 200), (x, y), (x+3, y+3), 2)  # Bone
-            elif self.resource_target_type == 'wood':
-                # Draw a log shape
-                pygame.draw.rect(screen, (101, 67, 33), (x-3, y-2, 6, 4))  # Brown log
-                pygame.draw.line(screen, (50, 25, 0), (x-3, y-2), (x+3, y-2), 1)  # Wood grain
-            elif self.resource_target_type == 'stone':
-                # Draw a rock shape
-                pygame.draw.polygon(screen, (100, 100, 100), [(x, y-3), (x+3, y), (x, y+3), (x-3, y)])
-            elif self.resource_target_type == 'water':
-                # Draw a water droplet
-                pygame.draw.circle(screen, (0, 0, 200), (x, y), 3)  # Blue droplet
-                pygame.draw.polygon(screen, (0, 0, 200), [(x, y-5), (x+3, y-1), (x-3, y-1)])
-            elif self.resource_target_type == 'medicinal':
-                # Draw a medical cross
-                pygame.draw.rect(screen, (255, 255, 255), (x-3, y-1, 6, 2))
-                pygame.draw.rect(screen, (255, 255, 255), (x-1, y-3, 2, 6))
-            elif self.resource_target_type == 'minerals':
-                # Draw a gold nugget
-                pygame.draw.circle(screen, (255, 215, 0), (x, y), 3)  # Gold center
-                pygame.draw.circle(screen, (255, 255, 200), (x-1, y-1), 1)  # Highlight
-            
-            # Draw a line to target if it exists
-            if self.resource_target and hasattr(self, 'camera_x') and hasattr(self, 'camera_y'):
-                target_x, target_y = self.resource_target
-                target_screen_x = (target_x * 32) + 16 - self.camera_x  # Center of tile
-                target_screen_y = (target_y * 32) + 16 - self.camera_y
+        # Draw reason text if any health or mood change is happening
+        if health_change_reason or mood_change_reason:
+            reason_text = ""
+            if health_change_reason and mood_change_reason:
+                reason_text = f"{health_change_reason}, {mood_change_reason}"
+            elif health_change_reason:
+                reason_text = health_change_reason
+            else:
+                reason_text = mood_change_reason
                 
-                # Draw a dotted line to target
-                for i in range(0, 100, 5):  # Draw dots every 5 pixels
-                    t = i / 100.0
-                    dot_x = x + (target_screen_x - x) * t
-                    dot_y = y + (target_screen_y - y) * t
-                    pygame.draw.circle(screen, color, (int(dot_x), int(dot_y)), 1)
-        
-        # Show team strategy if animal is a team leader
-        if hasattr(self, 'team') and self.team and hasattr(self.team, 'leader') and self.team.leader == self:
-            if hasattr(self.team, 'resource_strategy'):
-                # Define colors for different strategies
-                strategy_colors = {
-                    'survival': (255, 0, 0),       # Red
-                    'establish_base': (0, 0, 255), # Blue
-                    'gather_food': (0, 255, 0),    # Green
-                    'defense': (255, 165, 0),      # Orange
-                    'expand': (255, 0, 255),       # Purple
-                    'balanced': (255, 255, 255)    # White
-                }
-                
-                # Get color based on strategy
-                color = strategy_colors.get(self.team.resource_strategy, (255, 255, 255))
-                
-                # Draw strategy indicator above the resource indicator
-                pygame.draw.circle(screen, (0, 0, 0), (x, y-12), 6)  # Black background
-                pygame.draw.circle(screen, color, (x, y-12), 4)  # Colored circle
+            reason_font = pygame.font.Font(None, 14)  # Even smaller font for reason
+            reason_surface = reason_font.render(reason_text, True, (255, 255, 255))  # White text
+            reason_rect = reason_surface.get_rect(center=(bar_x + bar_width//2, reason_y + 4))
+            screen.blit(reason_surface, reason_rect)
 
     def cleanup(self):
         """Clean up resources associated with the animal."""
@@ -865,12 +829,28 @@ class Animal(pygame.sprite.Sprite):
         self.max_health = 100.0 * (1 + self.stamina_rating * 0.5)
         self.health = self.max_health
         
-    def take_damage(self, amount: float) -> None:
+    def take_damage(self, amount: float, attacker=None) -> None:
         """Take damage with safety checks."""
         if not isinstance(amount, (int, float)) or math.isnan(amount):
             return
             
         self.health = max(0, min(self.max_health, self.health - amount))
+        
+        # Apply the "be_attacked" action effect on mood
+        _, mood_change = self.health_mood_system.apply_action('be_attacked', amount / 10.0)
+        self.mood_points = max(0, min(self.max_mood, self.mood_points + mood_change))
+        
+        # Add injured status effect if significant damage
+        if amount > 10:
+            self.status_effects['injured'] = 60.0  # 60 seconds of being injured
+        
+        # If really low health, add scared status
+        if self.health / self.max_health < 0.3:
+            self.status_effects['scared'] = 30.0  # 30 seconds of being scared
+            
+        # If attacked, may add angry status
+        if attacker and random.random() < 0.7:
+            self.status_effects['angry'] = 30.0  # 30 seconds of being angry
         
     def heal(self, amount: float) -> None:
         """Heal the animal by the specified amount."""
@@ -879,12 +859,20 @@ class Animal(pygame.sprite.Sprite):
             
         self.health = min(self.health + amount, self.max_health)
 
-    def _find_resource_target(self, resource_system: 'ResourceSystem'):
+        # Add content status effect after healing
+        self.status_effects['content'] = 15.0  # 15 seconds of being content
+        
+        # Positive mood change from healing
+        self.mood_points = min(self.max_mood, self.mood_points + amount / 2)
+
+    def _find_resource_target(self, resource_system: 'ResourceSystem', specific_type=None):
         """Find a suitable resource target with improved effectiveness."""
         # Skip if already seeking a resource
         if hasattr(self, 'resource_target') and self.resource_target and hasattr(self, 'resource_target_type'):
-            # Check if we should keep the current target
-            if random.random() < 0.8:  # 80% chance to keep current target
+            # Only override if specific type is provided and different from current target
+            if specific_type and specific_type != self.resource_target_type:
+                pass  # Continue with the function to find the specific resource
+            else:
                 return
         
         # Determine what type of resource to look for based on needs
@@ -1032,16 +1020,41 @@ class Animal(pygame.sprite.Sprite):
     def eat(self, food_type: str, amount: float):
         """Simulate eating behavior."""
         if food_type == 'plant' and self._can_eat_plants():
-            self.hunger = max(0, self.hunger - amount)
-            self.mood_points += amount * 2
+            hp_change, mood_change = self.health_mood_system.apply_action('eat_plant', amount / 5.0)
+            self.health = min(self.max_health, self.health + hp_change)
+            self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+            self.hunger = max(0, self.hunger - amount * 10)
+            
+            # Direct health boost in addition to action effect
+            self.health = min(self.max_health, self.health + amount * 0.5)
+            
+            # Add content status effect
+            self.status_effects['content'] = 20.0  # 20 seconds of being content
+            
         elif food_type == 'meat' and self._can_eat_meat():
-            self.hunger = max(0, self.hunger - amount)
-            self.mood_points += amount * 2
+            hp_change, mood_change = self.health_mood_system.apply_action('eat_meat', amount / 5.0)
+            self.health = min(self.max_health, self.health + hp_change)
+            self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+            self.hunger = max(0, self.hunger - amount * 15)
+            
+            # Direct health boost in addition to action effect
+            self.health = min(self.max_health, self.health + amount * 0.8)
+            
+            # Add content status effect
+            self.status_effects['content'] = 20.0  # 20 seconds of being content
 
     def drink(self, amount: float):
         """Simulate drinking behavior."""
-        self.thirst = max(0, self.thirst - amount)
-        self.mood_points += amount
+        hp_change, mood_change = self.health_mood_system.apply_action('drink_water', amount / 5.0)
+        self.health = min(self.max_health, self.health + hp_change)
+        self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+        self.thirst = max(0, self.thirst - amount * 20)
+        
+        # Direct health boost in addition to action effect
+        self.health = min(self.max_health, self.health + amount * 0.3)
+        
+        # Add content status effect
+        self.status_effects['content'] = 15.0  # 15 seconds of being content
 
     def team_up(self, other: 'Animal'):
         """Simulate teaming up with another animal."""
@@ -1050,27 +1063,215 @@ class Animal(pygame.sprite.Sprite):
             new_team.add_member(other)
             self.team = new_team
             other.team = new_team
-            self.social_needs = max(0, self.social_needs - 10)
-            self.mood_points += 10
+            
+            # Apply socialize action
+            hp_change, mood_change = self.health_mood_system.apply_action('socialize', 1.0)
+            self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+            other.mood_points = min(other.max_mood, other.mood_points + mood_change)
+            
+            self.social_needs = max(0, self.social_needs - 30)
+            other.social_needs = max(0, other.social_needs - 30)
+            
+            # Add excited status effect
+            self.status_effects['excited'] = 20.0  # 20 seconds of being excited
+            other.status_effects['excited'] = 20.0  # 20 seconds of being excited
 
     def attack(self, target: 'Animal'):
         """Simulate attacking another animal."""
-        if self.hunger > 50 and target.health > 0:
-            damage = min(10, target.health)
-            target.health -= damage
-            self.hunger = max(0, self.hunger - damage)
-            self.mood_points -= 5
+        if target.health > 0:
+            # Calculate damage based on attacker's attributes
+            base_damage = 10 * self.attack_multiplier
+            actual_damage = base_damage / max(1.0, target.armor_rating)
+            
+            # Apply attack action impact to attacker
+            hp_change, mood_change = self.health_mood_system.apply_action('attack', 1.0)
+            self.health = max(0, min(self.max_health, self.health + hp_change))
+            self.mood_points = max(0, min(self.max_mood, self.mood_points + mood_change))
+            
+            # Inflict damage on target with reference to attacker
+            target.take_damage(actual_damage, self)
+            
+            # If carnivore, reduce hunger from attack (representing feeding)
+            if self._can_eat_meat():
+                self.hunger = max(0, self.hunger - 5)
+            
+            # If predator, gain health from successful attack on prey
+            if self._can_eat_meat() and not self._can_eat_plants() and target.health <= 0:
+                hunt_hp_change, hunt_mood_change = self.health_mood_system.apply_action('hunt_success', 1.0)
+                self.health = min(self.max_health, self.health + hunt_hp_change)
+                self.mood_points = min(self.max_mood, self.mood_points + hunt_mood_change)
+                self.hunger = max(0, self.hunger - 30)
+            elif target.health > 0:
+                # Failed hunt
+                fail_hp_change, fail_mood_change = self.health_mood_system.apply_action('hunt_failure', 0.5)
+                self.health = max(0, min(self.max_health, self.health + fail_hp_change))
+                self.mood_points = max(0, min(self.max_mood, self.mood_points + fail_mood_change))
+            
+            # Add angry status effect to attacker
+            self.status_effects['angry'] = 15.0  # 15 seconds of being angry
 
     def sleep(self, duration: float):
         """Simulate sleeping behavior."""
-        self.sleepiness = max(0, self.sleepiness - duration)
-        self.health = min(self.max_health, self.health + duration * 2)
-        self.mood_points += duration
+        hp_change, mood_change = self.health_mood_system.apply_action('sleep', duration / 10.0)
+        self.health = min(self.max_health, self.health + hp_change)
+        self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+        self.exhaustion = max(0, self.exhaustion - duration * 20)
+        
+        # Direct health boost in addition to action effect
+        self.health = min(self.max_health, self.health + duration)
+        
+        # Add content status effect
+        self.status_effects['content'] = duration  # Duration seconds of being content
+        
+        # Clear some negative status effects
+        if 'exhaustion' in self.status_effects:
+            del self.status_effects['exhaustion']
+        if 'angry' in self.status_effects:
+            del self.status_effects['angry']
+        if 'scared' in self.status_effects:
+            del self.status_effects['scared']
 
     def mate(self, partner: 'Animal'):
         """Simulate mating behavior."""
         if self.mood_points > 50 and partner.mood_points > 50:
-            self.mood_points -= 20
-            partner.mood_points -= 20
+            # Apply mate action
+            hp_change, mood_change = self.health_mood_system.apply_action('mate', 1.0)
+            self.health = max(0, min(self.max_health, self.health + hp_change))
+            self.mood_points = max(0, min(self.max_mood, self.mood_points + mood_change))
+            
+            # Apply to partner
+            partner_hp_change, partner_mood_change = partner.health_mood_system.apply_action('mate', 1.0)
+            partner.health = max(0, min(partner.max_health, partner.health + partner_hp_change))
+            partner.mood_points = max(0, min(partner.max_mood, partner.mood_points + partner_mood_change))
+            
+            # Add excited status effect
+            self.status_effects['excited'] = 30.0  # 30 seconds of being excited
+            partner.status_effects['excited'] = 30.0  # 30 seconds of being excited
+            
             # Logic to create offspring can be added here
+            
+    def play(self, partner: 'Animal'):
+        """Simulate play behavior with another animal."""
+        hp_change, mood_change = self.health_mood_system.apply_action('play', 1.0)
+        self.health = max(0, min(self.max_health, self.health + hp_change))
+        self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+        
+        # Apply to partner
+        partner_hp_change, partner_mood_change = partner.health_mood_system.apply_action('play', 1.0)
+        partner.health = max(0, min(partner.max_health, partner.health + partner_hp_change))
+        partner.mood_points = min(partner.max_mood, partner.mood_points + partner_mood_change)
+        
+        # Reduce social needs
+        self.social_needs = max(0, self.social_needs - 20)
+        partner.social_needs = max(0, partner.social_needs - 20)
+        
+        # Add excited status effect
+        self.status_effects['excited'] = 20.0  # 20 seconds of being excited
+        partner.status_effects['excited'] = 20.0  # 20 seconds of being excited
+        
+    def groom(self, partner: 'Animal'):
+        """Simulate grooming behavior with another animal."""
+        hp_change, mood_change = self.health_mood_system.apply_action('groom', 1.0)
+        self.health = min(self.max_health, self.health + hp_change)
+        self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+        
+        # Apply to partner (partner benefits more)
+        partner_hp_change, partner_mood_change = partner.health_mood_system.apply_action('groom', 1.5)
+        partner.health = min(partner.max_health, partner.health + partner_hp_change)
+        partner.mood_points = min(partner.max_mood, partner.mood_points + partner_mood_change)
+        
+        # Reduce social needs
+        self.social_needs = max(0, self.social_needs - 15)
+        partner.social_needs = max(0, partner.social_needs - 30)
+        
+        # Add content status effect
+        self.status_effects['content'] = 25.0  # 25 seconds of being content
+        partner.status_effects['content'] = 30.0  # 30 seconds of being content
+
+    def get_mood_state(self) -> str:
+        """Get the current mood state of the animal."""
+        return self.health_mood_system.calculate_mood_state(self.mood_points)
+        
+    def get_health_state(self) -> str:
+        """Get the current health state of the animal."""
+        return self.health_mood_system.calculate_health_state(self.health, self.max_health)
+
+    def _update_needs(self, dt: float):
+        """Update all needs over time."""
+        # Increase needs over time
+        self.hunger += dt * 2.0  # Units per second
+        self.thirst += dt * 3.0  # Thirst increases faster than hunger
+        self.exhaustion += dt * 1.0  # Units per second
+        self.social_needs += dt * 0.5  # Units per second
+        
+        # Cap values
+        self.hunger = min(100.0, self.hunger)
+        self.thirst = min(100.0, self.thirst)
+        self.exhaustion = min(100.0, self.exhaustion)
+        self.social_needs = min(100.0, self.social_needs)
+        
+        # Apply status effects based on needs
+        if self.hunger > 80:
+            self.status_effects['hunger'] = float('inf')
+        elif self.hunger < 30 and 'hunger' in self.status_effects:
+            del self.status_effects['hunger']
+            
+        if self.thirst > 80:
+            self.status_effects['thirst'] = float('inf')
+        elif self.thirst < 30 and 'thirst' in self.status_effects:
+            del self.status_effects['thirst']
+            
+        if self.exhaustion > 80:
+            self.status_effects['exhaustion'] = float('inf')
+        elif self.exhaustion < 30 and 'exhaustion' in self.status_effects:
+            del self.status_effects['exhaustion']
+
+    def _update_status_effects(self, dt: float):
+        """Update all status effects and apply their impacts."""
+        expired_statuses = []
+        
+        # Get updates for all status effects
+        updates = self.health_mood_system.update_status_effects(self.status_effects, dt)
+        
+        for status, (hp_change, mood_change, remaining) in updates.items():
+            # Apply the changes
+            self.health = max(0, min(self.max_health, self.health + hp_change))
+            self.mood_points = max(0, min(self.max_mood, self.mood_points + mood_change))
+            
+            # Update remaining duration or mark for removal
+            if remaining <= 0:
+                expired_statuses.append(status)
+            else:
+                self.status_effects[status] = remaining
+        
+        # Remove expired statuses
+        for status in expired_statuses:
+            if status in self.status_effects:
+                del self.status_effects[status]
+
+    def _seek_resource_by_type(self, resource_type: str, resource_system: 'ResourceSystem'):
+        """Seek a specific type of resource based on needs."""
+        if resource_type == "water":
+            # Look for water resources
+            self._find_resource_target(resource_system, 'water')
+        elif resource_type == "food":
+            # Look for appropriate food type
+            if self._can_eat_plants():
+                self._find_resource_target(resource_system, 'food_plant')
+            elif self._can_eat_meat():
+                self._find_resource_target(resource_system, 'food_meat')
+        elif resource_type == "medicinal":
+            # Look for medicinal resources
+            self._find_resource_target(resource_system, 'medicinal')
+        elif resource_type == "rest":
+            # Find a safe place to rest
+            self.state = "resting"
+            # Apply rest action
+            hp_change, mood_change = self.health_mood_system.apply_action('rest', 1.0)
+            self.health = min(self.max_health, self.health + hp_change)
+            self.mood_points = min(self.max_mood, self.mood_points + mood_change)
+            self.exhaustion = max(0, self.exhaustion - 20)
+        elif resource_type == "social":
+            # Try to find other animals
+            self.state = "seeking_social"
 

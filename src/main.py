@@ -872,7 +872,7 @@ class GameState:
                     if animal1.thirst > 70:
                         # Find water and drink
                         animal1.drink(10)  # Example action
-                    if animal1.sleepiness > 70:
+                    if animal1.exhaustion > 70:
                         # Find a safe place to sleep
                         animal1.sleep(5)  # Example action
                     if animal1.social_needs > 70:
